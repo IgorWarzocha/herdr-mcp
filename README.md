@@ -43,7 +43,7 @@ Print the token when you need to paste it into a client: `cat ~/.config/herdr-mc
 
 ```sh
 mkdir -p ~/.config/herdr-mcp ~/.config/systemd/user
-cp .env.example ~/.config/herdr-mcp/service.env      # edit PATH: Herdr 0.9+ and node dirs first
+cp .env.example ~/.config/herdr-mcp/service.env      # edit PATH (absolute dirs, Herdr 0.9+ and node first)
 cp systemd/herdr-mcp.service ~/.config/systemd/user/ # edit WorkingDirectory if not ~/herdr-mcp
 systemctl --user daemon-reload
 systemctl --user enable --now herdr-mcp.service
@@ -51,7 +51,7 @@ loginctl enable-linger "$USER"                        # keep running after logou
 journalctl --user -u herdr-mcp -n 20
 ```
 
-systemd does **not** read your shell rc, so mise/nvm/asdf shims aren't on PATH. Put absolute directories in `service.env`, or an absolute node path in `ExecStart`.
+systemd does **not** read your shell rc, so mise/nvm/asdf shims aren't on PATH. Put absolute directories in `service.env` (systemd doesn't expand `%h`, `~` or `$HOME` there), or an absolute node path in `ExecStart`.
 
 ## Expose it
 
