@@ -1,6 +1,14 @@
 # herdr-mcp
 
-Let remote agents (Grok Bot, Cursor cloud agents, Cursor desktop, anything that speaks MCP) list, read and message the panes in your Herdr session.
+**An MCP server that lets cloud and hosted agents drive Herdr running on your own machine.** Cursor cloud agents, Grok Bot, Muse, OpenClaw, or any remote MCP client can list, read and message the terminal panes on your laptop or home server.
+
+```mermaid
+flowchart LR
+  A["Hosted agent<br/>(Cursor, Grok Bot, Muse, OpenClaw…)"] -->|"HTTPS + Bearer token"| T["Tunnel<br/>(Tailscale Funnel / Cloudflare Tunnel)"]
+  T -->|"http://127.0.0.1:8792/mcp"| B["herdr-mcp<br/>(local bridge)"]
+  B -->|"execFile herdr …<br/>HERDR_SOCKET_PATH"| H["herdr CLI → herdr.sock"]
+  H --> P["your panes"]
+```
 
 It's a **thin pass-through**, not a 90-tool schema. Two tools:
 
@@ -16,14 +24,23 @@ It's a **thin pass-through**, not a 90-tool schema. Two tools:
 
 No shell is involved: arguments go straight to `herdr` via `execFile`. `command` strings support quotes and backslashes only, with no `$VAR`, `$(...)`, globs, `~`, `;` or `|`.
 
-> Setting this up with an agent? Point it at [AGENTS.md](AGENTS.md). It's an ordered, verifiable runbook.
+> ⚠️ **Holding the token = shell access to your machine as your user.** Read [Risks](#risks-read-this-first) before exposing it.
+
+> Setting this up with an agent? Point it at [AGENTS.md](AGENTS.md). It's an ordered, verifiable runbook with explicit stop-and-ask points.
 
 ## Requirements
 
-- Herdr **0.9+** with a running server (`herdr --version`), first on the service's PATH
-- Node **22+** (Bun works too: `bun bin/herdr-mcp.mjs`)
-- Linux with systemd user services (or any process supervisor)
-- For hosted clients: a public HTTPS URL. Tailscale Funnel or Cloudflare Tunnel both work.
+| You need | Notes |
+|---|---|
+| A machine that stays on | Laptop sleep = agents lose access. A home server or always-on desktop is best. |
+| Linux (tested) or macOS (**untested**) | The code is plain Node and portable. The shipped service file is systemd-only; macOS/WSL/containers use launchd or `nohup` (below). |
+| Herdr **0.9+**, server running | `herdr --version`. It must come first on the service's PATH. |
+| Node **22+** | `engines` in package.json. (The code needs ≥ 20.3 for `AbortSignal.any`, but only 22 is tested.) Bun also works: `bun bin/herdr-mcp.mjs`. |
+| A public HTTPS tunnel | **Either** a free Tailscale account with MagicDNS, HTTPS certificates and Funnel enabled in the admin console, **or** a Cloudflare account with a domain on Cloudflare for Tunnel. |
+
+**What only you (the human) can do:** create/log in to the Tailscale or Cloudflare account; enable HTTPS + Funnel in the Tailscale admin console (or allow it in the ACL policy); run `sudo` commands if the agent has no sudo; paste the token into Grok Bot / Cursor / other client settings; decide whether the risk is acceptable.
+
+**What an agent can do:** everything else: clone, install, create the token, write the service, add the Funnel path, verify each step. See [AGENTS.md](AGENTS.md).
 
 ## Install
 
@@ -52,6 +69,16 @@ journalctl --user -u herdr-mcp -n 20
 ```
 
 systemd does **not** read your shell rc, so mise/nvm/asdf shims aren't on PATH. Put absolute directories in `service.env` (systemd doesn't expand `%h`, `~` or `$HOME` there), or an absolute node path in `ExecStart`.
+
+### No systemd (macOS, WSL without systemd, containers)
+
+Plain background process (doesn't survive reboot):
+```sh
+cd ~/herdr-mcp && set -a && . ~/.config/herdr-mcp/service.env && set +a
+nohup node bin/herdr-mcp.mjs >> ~/.config/herdr-mcp/log 2>&1 &
+```
+
+macOS launchd (untested): create `~/Library/LaunchAgents/dev.herdr-mcp.plist` with `ProgramArguments` = `[/absolute/path/to/node, bin/herdr-mcp.mjs]`, `WorkingDirectory` = the repo, `EnvironmentVariables` holding `PATH` (absolute, Herdr 0.9+ first) and `PORT`, `RunAtLoad` and `KeepAlive` true. Then `launchctl load ~/Library/LaunchAgents/dev.herdr-mcp.plist`. Check where Herdr puts its socket on macOS and set `HERDR_MCP_SOCKET` if it isn't `~/.config/herdr/herdr.sock`.
 
 ## Expose it
 
@@ -105,16 +132,33 @@ Then ask it: "use herdr_skill, then list my panes".
 
 **Cursor desktop:** `~/.cursor/mcp.json` or `.cursor/mcp.json` gets the same JSON. Export `HERDR_MCP_TOKEN` in your environment, and never commit a literal token.
 
-## Security
+## Risks (read this first)
 
-Read this before exposing it.
+Plainly: **this is remote control of your terminals.**
 
-- **This is remote control of your terminals.** Anyone with the token can type into your panes, which means running arbitrary commands as your user, and can read anything on screen, including secrets. The CLI allow-list is an accident guard, **not a sandbox**.
-- **Bearer auth on every request**, compared in constant time. The token is 32 random bytes in a 0600 file that the service user owns. The server refuses to start otherwise.
-- **Session pin:** the socket is fixed by the server. `--session`, `--machine` and `--remote` are rejected, and so are server maintenance, the bare TUI and schema file output. Input commands need an explicit target pane, so `--current` can't be used.
-- **Limits:** 25 s per call, 128 KiB output, 128 KiB request body, 4 concurrent subprocesses, 16 in-flight requests. Browser `Origin`s are rejected unless listed in `HERDR_MCP_ORIGINS`.
-- Loopback bind by default. Expose it only through Funnel or Tunnel, and keep the token secret. Rotate it if it leaks.
-- Stateless: no transcript is stored. A timeout or cancel doesn't roll back input you already sent.
+- **Token = shell.** Anyone holding it can type into your panes (`pane run`, `send`), i.e. run arbitrary commands as your user, and read anything on screen, secrets included. The CLI allow-list is an accident guard, **not a sandbox**.
+- **Prompt injection.** A hosted agent that reads hostile content (a web page, an issue, an email, a file in a repo) can be steered into sending commands to your panes. The bridge can't tell a legitimate instruction from an injected one.
+- **It's on the public internet.** Funnel and Tunnel make the URL reachable by anyone. Only the token stands between them and your panes.
+- **Token leakage.** Chat logs, screenshots, committed `mcp.json` files, shell history, client config sync.
+- **Third parties hold the token.** Once pasted into Grok Bot, Cursor, etc., that provider's systems store it and send requests on your behalf. You're trusting their security too.
+
+**What actually protects you** (verified in `src/`):
+- Bearer auth on every request, constant-time compare (`timingSafeEqual`). The token must be exactly 64 hex chars in a file owned by the service user with no group/other permissions, or the server refuses to start.
+- Binds to `127.0.0.1` by default; only reachable through your tunnel.
+- Session pin: the socket is fixed via `HERDR_SOCKET_PATH`. `--session`, `--machine`, `--remote`, `--remote-keybindings` are rejected. Only `pane`, `agent`, `workspace`, `tab`, `notification`, `status`, `api` subcommands run, so no server maintenance or bare TUI; `api --output` file writes are blocked. Input commands need an explicit target, so no `--current`.
+- No shell: `execFile` with a minimal env (`HOME`, `PATH`, `LANG`, socket). `command` strings reject `; | & < > \``.
+- Limits: 25 s per call, 128 KiB output, 128 KiB request body, 4 concurrent subprocesses, 16 in-flight requests, 64 connections, header/request timeouts.
+- Browser `Origin`s rejected unless listed in `HERDR_MCP_ORIGINS`.
+- Stateless: no transcript stored. systemd unit runs with `NoNewPrivileges` and `UMask=0077`.
+
+None of these stop a token holder (or a hijacked agent) from running commands in a pane.
+
+**Mitigations we recommend:**
+- Run a **dedicated Herdr session** for agents and point `HERDR_MCP_SOCKET` at it, so your personal panes aren't reachable.
+- Keep the generated 256-bit token; **rotate** it (`rm` the file, `npm run token`, restart, re-paste) whenever it might have leaked.
+- **Turn Funnel off** when you don't need it: `tailscale funnel --set-path /herdr-mcp off`. Or use `tailscale serve` (tailnet-only) if your clients are on your tailnet.
+- **Never commit the token.** Use `${env:HERDR_MCP_TOKEN}` / client secrets.
+- Paranoid: run Herdr and herdr-mcp as a separate, unprivileged Linux user with no sudo and no access to your files or SSH keys.
 
 ## Troubleshooting (every step that bit us)
 
