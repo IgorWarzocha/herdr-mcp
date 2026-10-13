@@ -41,7 +41,7 @@ try {
   const result = JSON.parse(response.content[0].text);
   assert.equal(response.isError, false);
   assert.equal(result.code, 'ok');
-  assert.equal(result.wait_timeout_ms, 600000);
+  assert.equal(result.wait_timeout_ms, 90000);
   assert.ok(result.elapsed_ms >= 65000);
   assert.equal(commands, 1);
   const keepalives = (streamText.match(/: keepalive/g) ?? []).length;

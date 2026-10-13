@@ -129,7 +129,7 @@ export function createRunner({ binary, socket, home, path, timeoutMs = 25000, ou
   return { run, stop: () => { for (const child of children) child.kill('SIGKILL'); } };
 }
 
-export const DEFAULT_WAIT_MAX_MS = 600000;
+export const DEFAULT_WAIT_MAX_MS = 90000;
 
 // Only read-only waits get the extended budget. A send --wait can have side effects.
 export function prepareWait(args, waitMaxMs = DEFAULT_WAIT_MAX_MS) {

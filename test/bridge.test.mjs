@@ -11,7 +11,7 @@ import { commandEnvironment, createRunner, normalize, splitCommand } from '../sr
 import { config, createHandler, readToken } from '../src/server.mjs';
 
 test('platform defaults match Herdr and explicit socket overrides win', () => {
-  assert.equal(config({}).waitMaxMs, 600000);
+  assert.equal(config({}).waitMaxMs, 90000);
   assert.equal(config({ HERDR_MCP_WAIT_MAX: '120000' }).waitMaxMs, 120000);
   for (const value of ['', '0', '-1', 'no', '1.5', '2147481648']) {
     assert.throws(() => config({ HERDR_MCP_WAIT_MAX: value }), /HERDR_MCP_WAIT_MAX/);

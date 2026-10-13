@@ -73,7 +73,7 @@ export function createHandler({ token, runner, origins, waitMaxMs = DEFAULT_WAIT
         return { content: [{ type: 'text', text: result.stdout }] };
       });
       server.registerTool('herdr', {
-        description: 'Run Herdr on the pinned server with explicit targets. Use args or a quote-only command. Friendly verbs: list, read, send, wait. Read herdr_skill for CLI syntax. Calls block: wait holds this call for up to ten minutes by default. Coding agents take minutes, not seconds. If you need the result before continuing, call wait and call it again on wait_timeout while work continues; do not assume finished or stuck. Otherwise carry on and check back later with read/list. send acknowledges delivery, not completion. Session switching and maintenance are disabled.',
+        description: 'Run Herdr on the pinned server with explicit targets. Use args or a quote-only command. Friendly verbs: list, read, send, wait. Read herdr_skill for CLI syntax. Calls block: wait holds this call for up to 90 seconds by default (configurable). Coding agents take minutes, not seconds. If you need the result before continuing, call wait. On wait_timeout, call wait again in a loop while work continues. Do not assume finished or stuck. Otherwise carry on and check back later with read/list. send acknowledges delivery, not completion. Session switching and maintenance are disabled.',
         inputSchema: toolSchemas.herdr
       }, async (input, extra) => {
         let args;

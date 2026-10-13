@@ -10,7 +10,9 @@ It is for people who already use Herdr and want to give an agent remote access. 
 
 If you want to keep chatting with an agent while it works, SSH into the machine and use Herdr directly. If you want a remote agent to wait for a result before continuing its own task, use the MCP connection.
 
-Coding tasks take minutes, not seconds. MCP waits can last up to ten minutes by default. If you do not need the result yet, let the agent carry on with other work and check back later.
+Coding tasks take minutes, not seconds. Each MCP wait lasts up to 90 seconds by default. If it returns `wait_timeout` while the agent is still working, call `wait` again in a loop until a result is ready or your overall deadline is reached. If you do not need the result yet, carry on with other work and check back later.
+
+The wait limit is configurable for local clients or others that tolerate longer calls. Hosted clients can impose their own shorter deadline. See [client timeout settings](docs/clients.md#verify-discovery-and-long-waits).
 
 ## What you need
 
