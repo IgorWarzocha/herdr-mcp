@@ -11,6 +11,11 @@ import { commandEnvironment, createRunner, normalize, splitCommand } from '../sr
 import { config, createHandler, readToken } from '../src/server.mjs';
 
 test('platform defaults match Herdr and explicit socket overrides win', () => {
+  assert.equal(config({}).waitMaxMs, 600000);
+  assert.equal(config({ HERDR_MCP_WAIT_MAX: '120000' }).waitMaxMs, 120000);
+  for (const value of ['', '0', '-1', 'no', '1.5', '2147481648']) {
+    assert.throws(() => config({ HERDR_MCP_WAIT_MAX: value }), /HERDR_MCP_WAIT_MAX/);
+  }
   for (const platform of ['linux', 'darwin']) {
     assert.equal(config({ HOME: '/Users/operator' }, platform).socket, '/Users/operator/.config/herdr/herdr.sock');
     assert.equal(config({ HOME: '/home/operator', XDG_CONFIG_HOME: '/custom' }, platform).tokenFile, '/custom/herdr-mcp/token');
@@ -104,13 +109,19 @@ test('timeout, cancellation and concurrency release the process slot', async () 
 
 test('real MCP transport requires auth, validates origin, discovers and executes two tools', async t => {
   const calls = [];
+  let next = {exit_code: 0, stdout: 'Installed guide\nKeep this exactly.\n', stderr: '', timed_out: false, truncated: false, cancelled: false};
   const http = createServer(createHandler({ token: 'test-token', origins: [], runner: {
-    async run(args) { calls.push(args); return {exit_code: 0, stdout: 'ok', stderr: '', timed_out: false, truncated: false, cancelled: false}; }
+    async run(args) { calls.push(args); if (next instanceof Error) throw next; return next; }
   }}));
   http.listen(0, '127.0.0.1'); await once(http, 'listening');
   const url = new URL(`http://127.0.0.1:${http.address().port}/mcp`);
   t.after(() => { http.close(); http.closeAllConnections(); });
-  assert.equal((await fetch(url, {method: 'POST'})).status, 401);
+  for (const headers of [{}, {Authorization: 'Bearer wrong-token'}]) {
+    const response = await fetch(url, {method: 'POST', headers});
+    assert.equal(response.status, 401);
+    assert.equal((await response.json()).code, 'bad_token');
+  }
+  assert.equal(calls.length, 0);
   assert.equal((await fetch(url, {method: 'POST', headers: {Authorization: 'Bearer test-token', Origin: 'https://evil.example'}})).status, 403);
   const client = new Client({name: 'test', version: '1'});
   t.after(() => client.close());
@@ -119,7 +130,23 @@ test('real MCP transport requires auth, validates origin, discovers and executes
   const result = await client.callTool({name: 'herdr', arguments: {command: 'send w1:p1 "hello"'}});
   assert.equal(result.isError, false);
   assert.deepEqual(calls.at(-1), ['agent', 'prompt', 'w1:p1', '--', 'hello']);
-  assert.equal((await client.callTool({name: 'herdr', arguments: {args: ['server', 'stop']}})).isError, true);
+  for (const args of [{args: ['server', 'stop']}, {args: [1]}, {command: 'read "'}, {args: [], command: ''}]) {
+    const invalid = await client.callTool({name: 'herdr', arguments: args});
+    assert.equal(invalid.isError, true);
+    assert.equal(JSON.parse(invalid.content[0].text).code, 'invalid_arguments');
+  }
   const skill = await client.callTool({name: 'herdr_skill', arguments: {}});
-  assert.match(skill.content[0].text, /external client/);
+  assert.equal(skill.content[0].text, next.stdout);
+  for (const name of ['herdr', 'herdr_skill']) {
+    next = Object.assign(new Error('sensitive path\nstack backtrace: secret'), {code: 'ENOENT'});
+    const failed = await client.callTool({name, arguments: name === 'herdr' ? {args: ['list']} : {}});
+    assert.equal(failed.isError, true);
+    assert.equal(JSON.parse(failed.content[0].text).code, 'herdr_unavailable');
+    assert.doesNotMatch(failed.content[0].text, /sensitive|stack|secret/);
+  }
+  next = {exit_code: 0, stdout: 'partial guide', stderr: '', truncated: true};
+  const truncated = await client.callTool({name: 'herdr_skill', arguments: {}});
+  assert.equal(truncated.isError, true);
+  assert.equal(JSON.parse(truncated.content[0].text).code, 'truncated');
+  assert.match(JSON.parse(truncated.content[0].text).next, /subcommand --help/);
 });

@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { BridgeError, commandResult, exceptionResult, failure } from './errors.mjs';
 
 // Quote-only shell words: no substitution, expansion, operators, or shell process.
 export function splitCommand(command) {
@@ -87,9 +88,9 @@ export function createRunner({ binary, socket, home, path, timeoutMs = 25000, ou
   let active = 0;
   const children = new Set();
   const env = commandEnvironment({ socket, home, path });
-  async function run(args, signal) {
-    if (active >= concurrency) throw new Error('Bridge busy; no command was started. Retry after an active call finishes');
-    if (signal?.aborted) throw new Error('Call cancelled before execution');
+  async function run(args, signal, { timeoutMs: callTimeoutMs = timeoutMs } = {}) {
+    if (active >= concurrency) throw new BridgeError('busy');
+    if (signal?.aborted) throw new BridgeError('cancelled');
     active++;
     try {
       return await new Promise((resolve, reject) => {
@@ -102,7 +103,7 @@ export function createRunner({ binary, socket, home, path, timeoutMs = 25000, ou
           child.kill('SIGTERM');
           killTimer ??= setTimeout(() => child.kill('SIGKILL'), 500);
         };
-        const timer = setTimeout(() => { timedOut = true; terminate(); }, timeoutMs);
+        const timer = setTimeout(() => { timedOut = true; terminate(); }, callTimeoutMs);
         const abort = () => { cancelled = true; terminate(); };
         signal?.addEventListener('abort', abort, { once: true });
         if (signal?.aborted) abort();
@@ -128,8 +129,57 @@ export function createRunner({ binary, socket, home, path, timeoutMs = 25000, ou
   return { run, stop: () => { for (const child of children) child.kill('SIGKILL'); } };
 }
 
-export const adaptation = `MCP bridge instructions (override local-shell assumptions in the upstream skill below):
-You are an external client, not a Herdr pane. Do not check or set HERDR_ENV. Use herdr_skill for this guide and herdr for commands; no local shell is required. The bridge pins the server socket and supplies no caller pane identity. Always use explicit targets; never rely on --current or UI focus. Do not close panes you did not create without permission, especially swarm leaders.
-herdr accepts exactly one of args (string array) or command (quote-only string, no expansion). Empty args prints help. Friendly verbs: list (agents), read <pane-or-agent>, send <agent-or-pane> "message" (agent prompt, submits Enter), wait <agent-or-pane> (agent state). Raw pane/agent/workspace/tab/notification/status/api commands remain available. Session/machine selection, maintenance, bare TUI and schema file output are disabled. Use raw pane list for all terminals; raw pane run for shell input. No friendly quit: graceful Pi shutdown needs Shepherdr's semantic channel.
-All calls have a 25-second hard limit, 128 KiB combined output, and four concurrent subprocesses. Use --timeout 20000 or less on waits. Timeout/cancellation is not rollback; inspect before retrying input. Truncated output requires narrower reads with --lines/source; this bridge stores no transcript. send acknowledges input, not a reply. Read afterwards; waits track state rather than individual turns and wait-output can match old text. No push inbox or durable notifications. Remote shell/file-reading examples in the upstream skill are not additional MCP capabilities.
-`;
+export const DEFAULT_WAIT_MAX_MS = 600000;
+
+// Only read-only waits get the extended budget. A send --wait can have side effects.
+export function prepareWait(args, waitMaxMs = DEFAULT_WAIT_MAX_MS) {
+  const waiting = (args[0] === 'agent' && args[1] === 'wait') ||
+    (args[0] === 'pane' && args[1] === 'wait-output');
+  if (!waiting || args.includes('--help') || args.includes('-h')) return null;
+  if (!args[2] || args[2].startsWith('-')) throw new BridgeError('invalid_arguments');
+  const bounded = args.slice(0, 3);
+  let duration = waitMaxMs, seen = false;
+  for (let i = 3; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--') { bounded.push(...args.slice(i)); break; }
+    if (arg === '--timeout' || arg.startsWith('--timeout=')) {
+      const value = arg === '--timeout' ? args[++i] : arg.slice('--timeout='.length);
+      if (seen || !/^\d+$/.test(value ?? '') || !Number.isSafeInteger(Number(value))) throw new BridgeError('invalid_arguments');
+      seen = true;
+      duration = Math.min(Number(value), duration);
+    } else bounded.push(arg);
+  }
+  const end = bounded.indexOf('--');
+  bounded.splice(end < 0 ? bounded.length : end, 0, '--timeout', String(duration));
+  return { args: bounded, target: args[2], timeout_ms: duration };
+}
+
+export async function executeCommand(runner, args, signal, waitMaxMs = DEFAULT_WAIT_MAX_MS) {
+  const started = performance.now();
+  let wait, result;
+  try {
+    wait = prepareWait(args, waitMaxMs);
+    // Let the CLI return its own timeout before the watchdog kills the process.
+    result = commandResult(await runner.run(wait?.args ?? args, signal, wait ? { timeoutMs: wait.timeout_ms + 2000 } : {}));
+  } catch (error) { result = exceptionResult(error); }
+  if (wait) {
+    result = { ...result, wait_timeout_ms: wait.timeout_ms };
+    if (result.code === 'timeout') {
+      const detail = failure('wait_timeout');
+      result = { ...result, ...detail, stderr: detail.message, state: 'unknown' };
+      // A timed-out wait is not evidence of working. Ask Herdr for current state.
+      let probe;
+      try {
+        probe = commandResult(await runner.run(['agent', 'get', wait.target], signal, { timeoutMs: 2000 }));
+      } catch (error) { probe = exceptionResult(error); }
+      if (probe.code === 'ok') {
+        try {
+          const state = JSON.parse(probe.stdout)?.result?.agent?.agent_status;
+          if (['idle', 'working', 'blocked', 'done', 'unknown'].includes(state)) result.state = state;
+          else result.state_error = failure('bridge_error');
+        } catch { result.state_error = failure('bridge_error'); }
+      } else result.state_error = { code: probe.code, message: probe.message, next: probe.next };
+    }
+  }
+  return { ...result, elapsed_ms: Math.round(performance.now() - started) };
+}

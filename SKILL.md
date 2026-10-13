@@ -1,19 +1,60 @@
 ---
 name: herdr-mcp-setup
-description: "Use when installing or connecting herdr-mcp so hosted agents can control Herdr on Linux, macOS or Windows."
+description: "Use when setting up herdr-mcp or operating Herdr through its MCP tools."
 ---
 
-Follow [AGENTS.md](AGENTS.md) step by step: preflight, install, token, OS-specific service, tunnel, connect, end-to-end test. Use [README.md](README.md#keep-the-bridge-running) for service recipes. Stop when verification fails.
+For installation, follow [AGENTS.md](AGENTS.md): inspect, explain requirements, ask which tunnel and client, then verify each setup step. Platform recipes are in [docs/setup.md](docs/setup.md), and connector templates in [docs/clients.md](docs/clients.md). Stop when verification fails. Do not change a live installation during repository work.
 
 Herdr runs on Linux, macOS and native Windows. Use systemd on Linux, the shipped launchd plist on macOS, or WSL2 with systemd for the Windows background setup. Native Windows foreground setup is also in the README. Keep Herdr, Node and the bridge in the same OS environment. A WSL bridge cannot control native Windows Herdr through its local socket.
 
-Key facts:
-- Two tools only: `herdr_skill` (read first) and `herdr` (`args` array or quote-only `command`; verbs list/read/send/wait).
-- Token: `npm run token` prints its path, not its contents. The default is under `~/.config` on Linux/macOS/WSL and `%APPDATA%` on Windows. `XDG_CONFIG_HOME` and `HERDR_MCP_TOKEN_FILE` can override it. POSIX enforces private permissions and ownership. Windows needs private NTFS ACLs, which the bridge does not validate. Clients send `Authorization: Bearer <token>`.
-- Funnel: `tailscale funnel --bg --set-path /herdr-mcp http://127.0.0.1:8792/mcp`. Use 443, not 10000. **Never** `serve reset` or `funnel reset`.
-- Service PATH must put Herdr 0.9+ first and use real binary paths, not version-manager shims. launchd settings live in the plist, not `service.env`.
-- launchd's user agent needs a logged-in session. WSL needs its distribution kept running. Neither recipe prevents machine sleep.
-- `*.ts.net` resolving to `198.18.0.1` on a client: investigate that client's DNS or proxy. Ask before modifying system hosts files.
-- HUMAN steps: enabling Funnel/HTTPS in the Tailscale admin console, and pasting the token into Grok Bot or Cursor.
-- Security: the token gives shell-equivalent control of your panes; prompt injection can steer a hosted agent into using it. Not a sandbox. Recommend a dedicated Herdr session and turning Funnel off when idle.
-- Unfamiliar system? Use the Quirks table (Q1-Q15) at the end of AGENTS.md. Stop and ask the human for logins, admin consoles, sudo and token pasting.
+The token gives shell-equivalent access. Recommend a dedicated Herdr session. **HUMAN:** accept the risks, complete provider logins and administrator approvals, and paste the existing token into the client. Never put it into chat or tracked files. Never run Serve/Funnel reset or alter another service's route or port exposure. Use AGENTS.md's Quirks table for setup failures.
+
+## Day-to-day use
+
+Call `herdr_skill` once to read the installed CLI guide. Then use `herdr` with an `args` array:
+
+```json
+{"args":["list"]}
+{"args":["read","w1:p1","--lines","80"]}
+{"args":["send","w1:p1","Review the current changes"]}
+{"args":["wait","w1:p1"]}
+```
+
+Replace the example target with an ID from `list`. Use `pane list` for all terminals, not just agents. `send` submits a prompt and acknowledges delivery, not completion. Read afterwards. The bridge pins the session, so do not use `--current`, `--session` or machine-routing options.
+
+## Watching a pane
+
+The default wait ceiling is ten minutes. A wait returns earlier when Herdr matches idle, done or blocked. The `herdr` tool description carries the blocking-call guidance. The separate `herdr_skill` tool returns the installed Herdr guide unchanged.
+
+- On `ok`, inspect Herdr's returned state and read the output. Blocked means the agent needs attention, not that it finished.
+- On `wait_timeout` with `state: working`, the wait expired without a match. To continue monitoring, repeat the wait rather than resending the task.
+- On `wait_timeout` with idle, done or blocked, read the pane because state may have changed at the deadline. With unknown state or `state_error`, inspect using `list` or `read` and follow the reported recovery advice.
+- Stop waiting when the user's overall deadline is reached. `elapsed_ms` measures this bridge call, not the age of the agent's task.
+
+`HERDR_MCP_WAIT_MAX` sets the ceiling in milliseconds, default `600000`. It applies only to `wait`, raw `agent wait` and `pane wait-output`. A supplied `--timeout` is capped at that ceiling. Ordinary commands, including `agent prompt --wait`, retain the 25-second watchdog. Prefer send followed by a separate long wait when you need the reply.
+
+The client must allow a request to last longer than the wait budget. [Client timeout guidance](docs/clients.md#verify-discovery-and-long-waits) explains the 15-second protocol keepalives and the SDK's shorter default. Keepalives do not add model turns or extend hard client deadlines. If a hosted client cuts the request short, report that limit rather than silently introducing repeated short tool calls.
+
+Waits track state, not individual message turns. `pane wait-output` searches existing output too. Neither proves that the most recent prompt has completed.
+
+## Status and recovery
+
+`herdr` returns JSON with `code`. Failures add `message` and `next`, with no exception stack or raw CLI failure dump. `herdr_skill` uses the same failure envelope. `wait_timeout` is a normal non-error wait result. Other non-`ok` codes set MCP `isError`. `bad_token` is an HTTP 401 response before a tool can run.
+
+| Code | What to do next | Ask the user? |
+|---|---|---|
+| `herdr_not_running` | Start Herdr or check the bridge's pinned socket. A dead socket does not prove the session was deleted. | Yes |
+| `session_missing` | Restore the intended session or correct the configured socket. Used only when Herdr explicitly reports a missing session. | Yes |
+| `pane_not_found` | Refresh `list` or `pane list` and choose the intended current ID. | If the target is absent or ambiguous |
+| `bad_token` | Copy the existing token into the client's bearer header. Do not rotate it automatically. | Yes, private client entry only |
+| `wait_timeout` | Check returned state and repeat a long wait while working. | Only for a blocker or overall deadline |
+| `timeout` | Read before retrying input. The command may already have taken effect. | If its outcome remains unclear |
+| `truncated` | Use fewer `--lines` or a narrower source. For an oversized skill, use subcommand `--help`. Never resend input to recover output. | Usually no |
+| `invalid_arguments` | Follow `next`, or read the guide and subcommand `--help`, then correct the call. | Usually no |
+| `busy` | Wait for an active call to finish, then retry. No command started. | No |
+| `cancelled` | Inspect before retrying. Cancellation is not rollback. | If mutation outcome is unclear |
+| `herdr_unavailable` | Check the executable, service PATH and permissions, then run doctor locally. | Yes |
+| `command_failed` | Check CLI help. If needed, run locally for full diagnostics. | If it persists |
+| `bridge_error` | Inspect the target, then check the bridge with doctor. | If it persists |
+
+Exit and timeout flags remain available. `truncated: true` marks omitted output, and partial successful output is retained. The bridge stores no full transcript. Successful pane text is unmodified and can itself contain application errors or stack traces. Do not confuse those with bridge failures.
