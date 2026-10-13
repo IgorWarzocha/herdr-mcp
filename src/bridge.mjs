@@ -136,7 +136,7 @@ export function prepareWait(args, waitMaxMs = DEFAULT_WAIT_MAX_MS) {
   const waiting = (args[0] === 'agent' && args[1] === 'wait') ||
     (args[0] === 'pane' && args[1] === 'wait-output');
   if (!waiting || args.includes('--help') || args.includes('-h')) return null;
-  if (!args[2] || args[2].startsWith('-')) throw new BridgeError('invalid_arguments');
+  if (!args[2] || args[2].startsWith('-')) throw new BridgeError('invalid_arguments', 'Put an explicit pane ID or agent name before the wait options.');
   const bounded = args.slice(0, 3);
   let duration = waitMaxMs, seen = false;
   for (let i = 3; i < args.length; i++) {
@@ -144,7 +144,9 @@ export function prepareWait(args, waitMaxMs = DEFAULT_WAIT_MAX_MS) {
     if (arg === '--') { bounded.push(...args.slice(i)); break; }
     if (arg === '--timeout' || arg.startsWith('--timeout=')) {
       const value = arg === '--timeout' ? args[++i] : arg.slice('--timeout='.length);
-      if (seen || !/^\d+$/.test(value ?? '') || !Number.isSafeInteger(Number(value))) throw new BridgeError('invalid_arguments');
+      if (seen || !/^\d+$/.test(value ?? '') || !Number.isSafeInteger(Number(value))) {
+        throw new BridgeError('invalid_arguments', 'Use --timeout once with a non-negative safe integer in milliseconds.');
+      }
       seen = true;
       duration = Math.min(Number(value), duration);
     } else bounded.push(arg);

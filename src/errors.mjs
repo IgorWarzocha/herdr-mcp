@@ -7,7 +7,7 @@ const advice = {
   timeout: ['The command timed out.', 'Read the target before retrying input. A timeout does not undo input.'],
   wait_timeout: ['The wait ended before its condition matched.', 'If the agent is still working, call wait again with the same target and condition. Read output on idle, done or blocked. Unknown state needs inspection, not an assumption of completion.'],
   truncated: ['Output exceeded the bridge limit.', 'Read again with fewer --lines or a narrower source. Do not repeat input commands to recover output. No full transcript is stored.'],
-  invalid_arguments: ['The command arguments are invalid or disallowed.', 'Use exactly one of args or command. Read herdr_skill or request subcommand --help, then correct the call.'],
+  invalid_arguments: ['The command arguments are invalid or disallowed.', 'Check the subcommand, flags and required values with herdr_skill or subcommand --help, then correct the call.'],
   busy: ['The bridge is busy. No command was started.', 'Wait for an active call to finish, then retry.'],
   cancelled: ['The call was cancelled.', 'Read the target before retrying input. Cancellation does not undo input.'],
   herdr_unavailable: ['The Herdr executable could not be started.', 'Ask the user to check HERDR_MCP_BINARY, the service PATH and executable permissions, then run doctor.'],
@@ -21,14 +21,15 @@ export function failure(code, next) {
 }
 
 export class BridgeError extends Error {
-  constructor(code) {
+  constructor(code, next) {
     super(advice[code][0]);
     this.code = code;
+    this.next = next;
   }
 }
 
 export function exceptionResult(error) {
-  if (error instanceof BridgeError) return failure(error.code);
+  if (error instanceof BridgeError) return failure(error.code, error.next);
   if (['ENOENT', 'EACCES', 'ENOEXEC', 'EPERM'].includes(error?.code)) return failure('herdr_unavailable');
   return failure('bridge_error');
 }

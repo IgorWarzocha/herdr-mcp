@@ -130,13 +130,34 @@ test('real MCP transport requires auth, validates origin, discovers and executes
   const result = await client.callTool({name: 'herdr', arguments: {command: 'send w1:p1 "hello"'}});
   assert.equal(result.isError, false);
   assert.deepEqual(calls.at(-1), ['agent', 'prompt', 'w1:p1', '--', 'hello']);
-  for (const args of [{args: ['server', 'stop']}, {args: [1]}, {command: 'read "'}, {args: [], command: ''}]) {
+  for (const [args, hint] of [
+    [{args: ['server', 'stop']}, /maintenance are disabled/],
+    [{args: ['pane', 'list', '--session', 'other']}, /routing are fixed/],
+    [{args: [1]}, /array of at most 256 strings/],
+    [{command: 'read "'}, /Unclosed quote/],
+    [{args: [], command: ''}, /exactly one of args or command/],
+    [{}, /exactly one of args or command/],
+    [{args: ['agent', 'wait']}, /explicit pane ID or agent name/],
+    [{args: ['agent', 'wait', 'worker', '--timeout=-1']}, /--timeout once/],
+  ]) {
     const invalid = await client.callTool({name: 'herdr', arguments: args});
     assert.equal(invalid.isError, true);
-    assert.equal(JSON.parse(invalid.content[0].text).code, 'invalid_arguments');
+    const detail = JSON.parse(invalid.content[0].text);
+    assert.equal(detail.code, 'invalid_arguments');
+    assert.match(detail.next, hint);
   }
   const skill = await client.callTool({name: 'herdr_skill', arguments: {}});
   assert.equal(skill.content[0].text, next.stdout);
+  next = {exit_code: 2, stdout: '', stderr: 'CLI diagnostic dump'};
+  for (const args of [['pane', 'unknown'], ['pane', 'list', '--unknown']]) {
+    const rejected = await client.callTool({name: 'herdr', arguments: {args}});
+    const detail = JSON.parse(rejected.content[0].text);
+    assert.equal(rejected.isError, true);
+    assert.equal(detail.code, 'invalid_arguments');
+    assert.match(detail.next, /subcommand, flags and required values/);
+    assert.doesNotMatch(detail.next, /exactly one/);
+    assert.deepEqual(calls.at(-1), args);
+  }
   for (const name of ['herdr', 'herdr_skill']) {
     next = Object.assign(new Error('sensitive path\nstack backtrace: secret'), {code: 'ENOENT'});
     const failed = await client.callTool({name, arguments: name === 'herdr' ? {args: ['list']} : {}});

@@ -58,7 +58,9 @@ export function createHandler({ token, runner, origins, waitMaxMs = DEFAULT_WAIT
           Object.hasOwn(toolSchemas, body.params?.name) &&
           !toolSchemas[body.params.name].safeParse(body.params.arguments ?? {}).success) {
         res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({
-          jsonrpc: '2.0', id: body.id, result: toolResult(failure('invalid_arguments')),
+          jsonrpc: '2.0', id: body.id, result: toolResult(failure('invalid_arguments', body.params.name === 'herdr'
+            ? 'Use args as an array of at most 256 strings, or command as a string of at most 65536 characters.'
+            : 'Supply a JSON arguments object. herdr_skill needs no arguments.')),
         }));
         return;
       }
