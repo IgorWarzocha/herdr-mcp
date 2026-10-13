@@ -1,0 +1,21 @@
+[Unit]
+Description=herdr-mcp (MCP bridge to Herdr)
+After=network.target
+
+[Service]
+Type=simple
+# Edit to where you cloned/installed the repo.
+WorkingDirectory=%h/herdr-mcp
+EnvironmentFile=-%h/.config/herdr-mcp/service.env
+# /usr/bin/env resolves node from PATH in service.env; or put an absolute node path here.
+ExecStart=/usr/bin/env node bin/herdr-mcp.mjs
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=5
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=true
+LimitNOFILE=256
+
+[Install]
+WantedBy=default.target

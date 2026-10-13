@@ -1,0 +1,7 @@
+node_modules/
+.env
+*.token
+token
+.DS_Store
+# local deployment unit (live service symlinks here)
+/herdr-mcp.service
