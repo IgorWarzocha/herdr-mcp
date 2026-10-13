@@ -2,10 +2,54 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { createRunner, normalize, splitCommand } from '../src/bridge.mjs';
-import { createHandler } from '../src/server.mjs';
+import { commandEnvironment, createRunner, normalize, splitCommand } from '../src/bridge.mjs';
+import { config, createHandler, readToken } from '../src/server.mjs';
+
+test('platform defaults match Herdr and explicit socket overrides win', () => {
+  for (const platform of ['linux', 'darwin']) {
+    assert.equal(config({ HOME: '/Users/operator' }, platform).socket, '/Users/operator/.config/herdr/herdr.sock');
+    assert.equal(config({ HOME: '/home/operator', XDG_CONFIG_HOME: '/custom' }, platform).tokenFile, '/custom/herdr-mcp/token');
+  }
+  const env = { USERPROFILE: 'C:\\Users\\operator', APPDATA: 'C:\\Users\\operator\\AppData\\Roaming', Path: 'C:\\tools' };
+  const windows = config(env, 'win32');
+  assert.equal(windows.socket, 'C:\\Users\\operator\\AppData\\Roaming\\herdr\\herdr.sock');
+  assert.equal(windows.tokenFile, 'C:\\Users\\operator\\AppData\\Roaming\\herdr-mcp\\token');
+  assert.equal(windows.path, 'C:\\tools');
+  assert.equal(config({ USERPROFILE: env.USERPROFILE, HOME: 'D:\\other' }, 'win32').socket, windows.socket);
+  assert.equal(config({ HOME: 'D:\\home' }, 'win32').socket, 'D:\\home\\.config\\herdr\\herdr.sock');
+  assert.equal(config({ ...env, XDG_CONFIG_HOME: 'D:\\config' }, 'win32').socket, 'D:\\config\\herdr\\herdr.sock');
+  assert.equal(config({ ...env, HERDR_SOCKET_PATH: 'D:\\inherited', HERDR_MCP_SOCKET: 'D:\\pinned' }, 'win32').socket, 'D:\\pinned');
+});
+
+test('Windows subprocess environment keeps loader variables without leaking identity or secrets', () => {
+  const env = commandEnvironment({ home: 'C:\\Users\\operator', path: 'C:\\tools', socket: 'C:\\pinned' }, {
+    SYSTEMROOT: 'C:\\Windows', APPDATA: 'C:\\profile', PATH: 'wrong', HERDR_SESSION: 'wrong',
+    HERDR_SOCKET_PATH: 'wrong', HERDR_PANE_ID: 'wrong', HERDR_MCP_TOKEN: 'secret',
+  }, 'win32');
+  assert.deepEqual(env, { HOME: 'C:\\Users\\operator', PATH: 'C:\\tools', LANG: 'C.UTF-8',
+    HERDR_SOCKET_PATH: 'C:\\pinned', SystemRoot: 'C:\\Windows', APPDATA: 'C:\\profile' });
+});
+
+test('token validation preserves POSIX ownership policy and validates content on Windows', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'herdr-mcp-token-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const file = join(dir, 'token');
+  await writeFile(file, 'a'.repeat(64) + '\n', { mode: 0o600 });
+  assert.equal(await readToken(file), 'a'.repeat(64));
+  if (process.platform !== 'win32') {
+    await assert.rejects(readToken(file, process.platform, process.getuid() + 1), /owned by/);
+    await chmod(file, 0o644);
+    await assert.rejects(readToken(file), /mode 0600/);
+  }
+  assert.equal(await readToken(file, 'win32'), 'a'.repeat(64));
+  await writeFile(file, 'not-a-token');
+  await assert.rejects(readToken(file, 'win32'), /64 hex/);
+});
 
 test('quote parser preserves literal payloads without shell expansion', () => {
   assert.deepEqual(splitCommand(`send w1:p1 "Hello '$HOME' $(whoami)"`), ['send', 'w1:p1', "Hello '$HOME' $(whoami)"]);
@@ -29,7 +73,7 @@ test('aliases and raw commands share routing and explicit-input policy', () => {
 });
 
 function runner(options = {}) {
-  return createRunner({ binary: process.execPath, home: '/tmp', path: '/usr/bin:/bin', socket: '/tmp/test-herdr.sock', ...options });
+  return createRunner({ binary: process.execPath, home: tmpdir(), path: process.env.PATH, socket: join(tmpdir(), 'test-herdr.sock'), ...options });
 }
 
 test('subprocess output is bounded, environment isolated, exit code preserved', async () => {
@@ -39,12 +83,15 @@ test('subprocess output is bounded, environment isolated, exit code preserved', 
   assert.equal(result.stdout.length, 32);
   assert.equal(result.truncated, true);
   const env = await runner().run(['-e', 'console.log(JSON.stringify(process.env))']);
-  assert.equal(JSON.parse(env.stdout).HERDR_SOCKET_PATH, '/tmp/test-herdr.sock');
+  assert.equal(JSON.parse(env.stdout).HERDR_SOCKET_PATH, join(tmpdir(), 'test-herdr.sock'));
   assert.equal(JSON.parse(env.stdout).HERDR_PANE_ID, undefined);
+  const args = ['C:\\Users\\a b\\file', '$(whoami)', 'a&b'];
+  const literal = await runner().run(['-e', 'console.log(JSON.stringify(process.argv.slice(1)))', ...args]);
+  assert.deepEqual(JSON.parse(literal.stdout), args);
 });
 
 test('timeout, cancellation and concurrency release the process slot', async () => {
-  const run = runner({ timeoutMs: 80, concurrency: 1 });
+  const run = runner({ timeoutMs: 1000, concurrency: 1 });
   const first = run.run(['-e', 'setInterval(()=>{},1000)']);
   await assert.rejects(run.run(['-e', '']), /busy/);
   assert.equal((await first).timed_out, true);

@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // herdr-mcp            start the server (reads env, see .env.example)
-// herdr-mcp token      create the token file (0600) if missing and print its path
+// herdr-mcp token      create the token file (0600 on POSIX) if missing and print its path
 // herdr-mcp doctor     preflight checks: herdr on PATH, version, socket, token
 import { randomBytes } from 'node:crypto';
 import { mkdir, writeFile, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { config, main } from '../src/server.mjs';
+import { config, main, readToken } from '../src/server.mjs';
+import { commandEnvironment } from '../src/bridge.mjs';
 
 const cmd = process.argv[2];
 const cfg = config();
@@ -19,17 +20,20 @@ if (cmd === 'token') {
   }
 } else if (cmd === 'doctor') {
   let ok = true;
-  const check = (name, fn) => { try { console.log(`ok   ${name}: ${fn()}`); } catch (e) { ok = false; console.log(`FAIL ${name}: ${e.message.split('\n')[0]}`); } };
-  check('herdr', () => {
-    const v = execFileSync(cfg.binary, ['--version'], { env: { PATH: cfg.path, HOME: cfg.home } }).toString().trim();
+  const check = async (name, fn) => { try { console.log(`ok   ${name}: ${await fn()}`); } catch (e) { ok = false; console.log(`FAIL ${name}: ${e.message.split('\n')[0]}`); } };
+  const execOptions = { env: commandEnvironment(cfg), cwd: cfg.home, shell: false, windowsHide: true, timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] };
+  await check('herdr', () => {
+    const v = execFileSync(cfg.binary, ['--version'], execOptions).toString().trim();
     const [maj, min] = (v.match(/(\d+)\.(\d+)/) ?? []).slice(1).map(Number);
-    if (!(maj > 0 || min >= 9)) throw new Error(`${v} found first on PATH; need 0.9+ (stale /usr/bin/herdr?)`);
+    if (!(maj > 0 || min >= 9)) throw new Error(`${v} found first on PATH; need 0.9+ (check HERDR_MCP_BINARY and PATH)`);
     return v;
   });
-  for (const [n, f] of [['socket', cfg.socket], ['token', cfg.tokenFile]]) await stat(f).then(s => {
-    if (n === 'token' && (s.mode & 0o077)) { ok = false; console.log(`FAIL token: ${f} must be chmod 600`); }
-    else console.log(`ok   ${n}: ${f}`);
-  }, () => { ok = false; console.log(`FAIL ${n}: missing ${f}${n === 'token' ? ' (run: herdr-mcp token)' : ' (is herdr server running?)'}`); });
+  await check('socket', () => {
+    // Let Herdr probe its own transport: a Unix socket on POSIX, a named pipe on Windows.
+    execFileSync(cfg.binary, ['pane', 'list'], execOptions);
+    return `${cfg.socket} (Herdr responded)`;
+  });
+  await check('token', async () => { await readToken(cfg.tokenFile); return cfg.tokenFile; });
   process.exitCode = ok ? 0 : 1;
 } else if (!cmd || cmd === 'start') {
   main().catch(e => { console.error(e.message); process.exitCode = 1; });

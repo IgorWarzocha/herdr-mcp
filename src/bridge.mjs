@@ -70,21 +70,35 @@ export function normalize(input) {
   return args;
 }
 
+export function commandEnvironment({ socket, home, path }, source = process.env, platform = process.platform) {
+  const env = { HOME: home, PATH: path, LANG: 'C.UTF-8' };
+  if (socket) env.HERDR_SOCKET_PATH = socket;
+  // Keep Windows loader/profile variables, but never inherit pane identity or secrets.
+  if (platform === 'win32') {
+    for (const key of ['SystemRoot', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'PATHEXT', 'TEMP', 'TMP']) {
+      const actual = Object.keys(source).find(k => k.toLowerCase() === key.toLowerCase());
+      if (actual !== undefined) env[key] = source[actual];
+    }
+  }
+  return env;
+}
+
 export function createRunner({ binary, socket, home, path, timeoutMs = 25000, outputBytes = 131072, concurrency = 4 }) {
   let active = 0;
   const children = new Set();
-  const env = { HOME: home, PATH: path, LANG: 'C.UTF-8', HERDR_SOCKET_PATH: socket };
+  const env = commandEnvironment({ socket, home, path });
   async function run(args, signal) {
     if (active >= concurrency) throw new Error('Bridge busy; no command was started. Retry after an active call finishes');
     if (signal?.aborted) throw new Error('Call cancelled before execution');
     active++;
     try {
       return await new Promise((resolve, reject) => {
-        const child = spawn(binary, args, { env, cwd: home, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+        const child = spawn(binary, args, { env, cwd: home, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
         children.add(child);
         const chunks = { stdout: [], stderr: [] };
         let remaining = outputBytes, timedOut = false, truncated = false, cancelled = false, killTimer;
         const terminate = () => {
+          // Node supports these on Windows too, where either signal forcibly terminates the child.
           child.kill('SIGTERM');
           killTimer ??= setTimeout(() => child.kill('SIGKILL'), 500);
         };

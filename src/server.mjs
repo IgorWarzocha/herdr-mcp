@@ -2,7 +2,8 @@ import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { timingSafeEqual } from 'node:crypto';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, posix, win32 } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
@@ -78,28 +79,40 @@ export function createHandler({ token, runner, origins }) {
   };
 }
 
-export function config(env = process.env) {
-  const home = env.HOME ?? homedir();
-  const xdg = env.XDG_CONFIG_HOME ?? join(home, '.config');
+export function config(env = process.env, platform = process.platform) {
+  const win = platform === 'win32';
+  const { join } = win ? win32 : posix;
+  const home = (win ? env.USERPROFILE ?? env.HOME : env.HOME) ?? homedir();
+  const xdg = env.XDG_CONFIG_HOME ?? (win
+    ? (env.APPDATA ?? (env.USERPROFILE ? join(home, 'AppData', 'Roaming') : join(home, '.config')))
+    : join(home, '.config'));
   return {
     home,
     tokenFile: env.HERDR_MCP_TOKEN_FILE ?? join(xdg, 'herdr-mcp', 'token'),
+    // Herdr uses this path as a named-pipe identifier on Windows, not a Unix socket.
     socket: env.HERDR_MCP_SOCKET ?? env.HERDR_SOCKET_PATH ?? join(xdg, 'herdr', 'herdr.sock'),
     binary: env.HERDR_MCP_BINARY ?? 'herdr',
     host: env.HERDR_MCP_HOST ?? '127.0.0.1',
     port: Number(env.PORT ?? env.HERDR_MCP_PORT ?? 8792),
-    path: env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
+    path: env.PATH ?? (win ? (env.Path ?? '') : '/usr/local/bin:/usr/bin:/bin'),
     origins: (env.HERDR_MCP_ORIGINS ?? '').split(',').map(s => s.trim()).filter(Boolean),
   };
 }
 
-export async function main() {
-  const { home, tokenFile, socket, binary, host, port, path, origins } = config();
-  if (!socket.startsWith('/')) throw new Error('HERDR_MCP_SOCKET must be an absolute path');
+export async function readToken(tokenFile, platform = process.platform, uid = process.getuid?.()) {
   const tokenStat = await stat(tokenFile);
-  if (tokenStat.mode & 0o077 || tokenStat.uid !== process.getuid()) throw new Error(`Token file ${tokenFile} must be owned by the service user with mode 0600 (chmod 600)`);
+  // POSIX only: Windows has no mode bits/uid; keep the token inside your user profile (NTFS ACLs).
+  if (!tokenStat.isFile()) throw new Error('Token must be a regular file');
+  if (platform !== 'win32' && (tokenStat.mode & 0o077 || tokenStat.uid !== uid)) throw new Error(`Token file ${tokenFile} must be owned by the service user with mode 0600 (chmod 600)`);
   const token = (await readFile(tokenFile, 'utf8')).trim();
   if (!/^[a-f0-9]{64}$/.test(token)) throw new Error('Token must be 64 hex chars; generate with: herdr-mcp token');
+  return token;
+}
+
+export async function main() {
+  const { home, tokenFile, socket, binary, host, port, path, origins } = config();
+  if (!isAbsolute(socket)) throw new Error('HERDR_MCP_SOCKET must be an absolute path');
+  const token = await readToken(tokenFile);
   const runner = createRunner({ binary, socket, home, path });
   const http = createServer(createHandler({ token, runner, origins }));
   http.requestTimeout = 15000;
@@ -111,6 +124,6 @@ export async function main() {
   });
 }
 
-if (process.argv[1] && import.meta.url === new URL(process.argv[1], 'file:').href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch(error => { console.error(error.message); process.exitCode = 1; });
 }
