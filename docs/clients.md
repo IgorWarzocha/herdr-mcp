@@ -64,10 +64,20 @@ For a client that wants a bearer-token field rather than a header, enter only th
 
 Ask the connected agent to call `herdr_skill`, then `herdr` with `{"args":["pane","list"]}`. Both must succeed before calling setup complete.
 
-Each wait allows 90 seconds by default. On `wait_timeout` while work continues, call `wait` again in a loop until the result is ready or the user's overall deadline is reached. Keep the same target and condition, and do not resend the task.
+Each wait allows 90 seconds by default; tool discovery reports the configured ceiling for this bridge. On `wait_timeout`, read with `--source visible` if looking for a reply, even when state is still working. If the result is still needed, call `wait` again with the same target, condition and timeout until it is ready or the user's overall deadline is reached. Do not resend the task.
 
 `HERDR_MCP_WAIT_MAX` sets the bridge ceiling in milliseconds, default `90000`. Configure the client's **tool request timeout** above that budget, allowing for cleanup and the final state check. For example, pass `{ timeout: 100000 }` as the third argument to the TypeScript MCP SDK's `client.callTool`. Its default is only 60000 ms. For a local or long-tolerant client, `HERDR_MCP_WAIT_MAX=600000` still permits ten-minute waits, provided the client timeout is longer, such as 620000 ms.
 
 Tool responses stream over HTTP with protocol-level keepalive comments every 15 seconds. These carry no model-visible messages and do not cost repeated tool calls. They protect against idle proxy timeouts, but cannot extend a client's hard deadline. This is streaming within Streamable HTTP, not the legacy SSE connector type.
 
-Live testing with Grok Bot accepted a 90-second wait and a call that returned at 99 seconds. A 300-second wait failed with MCP `-32001` timeout. This is the reason for the 90-second default, not a guarantee about every hosted client. Verify the selected client and tunnel on an existing working pane with an explicit target. Do not launch work or change a pane merely to test waiting without permission. If the client times out before the bridge returns `wait_timeout`, report that limit and adjust the client deadline or bridge ceiling. See [SKILL.md](../SKILL.md#watching-a-pane) for the monitoring pattern.
+Earlier Grok Bot testing accepted a 90-second wait and a call that returned at 99 seconds, but rejected 300 seconds with MCP `-32001`. A later connection report found that 75 seconds failed at the gateway while approximately 25 seconds worked. Neither observation establishes a universal hosted-client deadline.
+
+For a connection with that shorter limit, tell its agent to use this on every wait, substituting the actual pane ID:
+
+```json
+{"args":["wait","w1:p1","--timeout","25000"]}
+```
+
+This per-call setting needs no service restart and leaves other clients unchanged. Allow up to four additional seconds for cleanup and a state check. If every client of a bridge needs the lower ceiling, set `HERDR_MCP_WAIT_MAX=25000` in its service environment and restart only with deployment approval. The setting is bridge-wide, not per connector.
+
+Verify the selected client and tunnel on an existing working pane with an explicit target. Do not launch work or change a pane merely to test waiting without permission. A gateway timeout calls for a shorter wait or a longer client deadline, not another prompt. See [SKILL.md](../SKILL.md#watching-a-pane) for the monitoring pattern.

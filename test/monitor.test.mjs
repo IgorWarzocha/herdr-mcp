@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os';
 import { EventEmitter, once } from 'node:events';
 import { createServer, request } from 'node:http';
 import { createHandler } from '../src/server.mjs';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 const ok = { exit_code: 0, stdout: '', stderr: '', timed_out: false, truncated: false, cancelled: false };
 const expired = { ...ok, exit_code: 1, stderr: '{"id":"cli:wait","error":{"code":"timeout","message":"timed out waiting for agent status"}}' };
@@ -63,6 +65,44 @@ test('watchdog expiry is a wait outcome, but other failures do not become waits'
   const malformed = await executeCommand({async run(args) { return args[1] === 'get' ? {...ok, stdout: 'not json'} : expired; }}, ['agent', 'wait', 'worker']);
   assert.equal(malformed.state, 'unknown');
   assert.equal(malformed.state_error.code, 'bridge_error');
+});
+
+test('MCP discovery advertises the configured ceiling and 25-second waits preserve state and retry advice', async t => {
+  for (const waitMaxMs of [90000, 25000]) {
+    const calls = [];
+    const http = createServer(createHandler({token: 'wait-test', origins: [], waitMaxMs, runner: {
+      async run(args, signal, options) {
+        calls.push({args, options});
+        return args[1] === 'get' ? {...ok, stdout: JSON.stringify({result: {agent: {agent_status: 'working'}}})} : expired;
+      },
+    }}));
+    t.after(() => { http.close(); http.closeAllConnections(); });
+    http.listen(0, '127.0.0.1'); await once(http, 'listening');
+    const client = new Client({name: 'wait-test', version: '1'});
+    t.after(() => client.close());
+    await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${http.address().port}/mcp`), {
+      requestInit: {headers: {Authorization: 'Bearer wait-test'}},
+    }));
+    const tool = (await client.listTools()).tools.find(tool => tool.name === 'herdr');
+    assert.ok(tool.description.includes(`configured wait ceiling is ${waitMaxMs} ms`));
+    const requests = waitMaxMs === 90000 ? [['--timeout', '25000']] : [[], ['--timeout', '75000']];
+    for (const options of requests) {
+      // Repeated observations must retain the shorter budget, not resend input.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const response = await client.callTool({name: 'herdr', arguments: {args: ['wait', 'w1:p1', ...options]}});
+        const result = JSON.parse(response.content[0].text);
+        assert.equal(response.isError, false);
+        assert.equal(result.code, 'wait_timeout');
+        assert.equal(result.state, 'working');
+        assert.equal(result.wait_timeout_ms, 25000);
+        assert.match(result.next, /--source visible even while working/);
+        assert.match(result.next, /same target, condition and timeout/);
+        assert.deepEqual(calls.at(-2), {args: ['agent', 'wait', 'w1:p1', '--timeout', '25000'], options: {timeoutMs: 27000}});
+        assert.deepEqual(calls.at(-1), {args: ['agent', 'get', 'w1:p1'], options: {timeoutMs: 2000}});
+      }
+    }
+    await client.close();
+  }
 });
 
 test('per-call wait budget overrides but does not mutate the ordinary subprocess watchdog', async t => {

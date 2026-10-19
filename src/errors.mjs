@@ -3,9 +3,10 @@ const advice = {
   herdr_not_running: ['Herdr cannot be reached.', 'Ask the user to start Herdr or check the pinned HERDR_MCP_SOCKET in the bridge environment.'],
   session_missing: ['The selected session is missing.', 'Ask the user to restore the intended session or correct the bridge socket. Session switching is disabled here.'],
   pane_not_found: ['The pane or agent was not found.', 'Run list or pane list, then use an explicit current ID. Ask the user if the intended target is absent.'],
+  agent_not_idle: ['Herdr cannot capture the requested agent history while the agent is working.', 'Read the same target with --source visible for the current screen, or wait until idle and retry the history read. Visible output is not the full transcript.'],
   bad_token: ['Bearer token missing or rejected.', 'Ask the user to copy the existing token into the client Authorization: Bearer header. Do not rotate it or paste it into chat.'],
   timeout: ['The command timed out.', 'Read the target before retrying input. A timeout does not undo input.'],
-  wait_timeout: ['The wait ended before its condition matched.', 'If the agent is still working, call wait again with the same target and condition. Read output on idle, done or blocked. Unknown state needs inspection, not an assumption of completion.'],
+  wait_timeout: ['The wait ended before its condition matched.', 'If looking for a reply, read the target with --source visible even while working; an answer may already be on screen. If the result is still needed, repeat the wait with the same target, condition and timeout. Read output on idle, done or blocked. Unknown state needs inspection, not an assumption of completion. Do not resend the prompt.'],
   truncated: ['Output exceeded the bridge limit.', 'Read again with fewer --lines or a narrower source. Do not repeat input commands to recover output. No full transcript is stored.'],
   invalid_arguments: ['The command arguments are invalid or disallowed.', 'Check the subcommand, flags and required values with herdr_skill or subcommand --help, then correct the call.'],
   busy: ['The bridge is busy. No command was started.', 'Wait for an active call to finish, then retry.'],
@@ -40,6 +41,7 @@ const upstreamCodes = {
   session_missing: 'session_missing',
   pane_not_found: 'pane_not_found',
   agent_not_found: 'pane_not_found',
+  agent_not_idle: 'agent_not_idle',
   timeout: 'timeout',
 };
 

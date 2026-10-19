@@ -9,6 +9,7 @@ test('CLI error codes become bounded recovery advice without diagnostic dumps', 
   for (const [upstream, code] of [
     ['server_not_running', 'herdr_not_running'], ['pane_not_found', 'pane_not_found'],
     ['agent_not_found', 'pane_not_found'], ['session_not_found', 'session_missing'],
+    ['agent_not_idle', 'agent_not_idle'],
     ['timeout', 'timeout'], ['unrecognised_failure', 'command_failed'],
   ]) {
     const result = commandResult({ ...ok, exit_code: 1, stdout: 'stack backtrace: private',

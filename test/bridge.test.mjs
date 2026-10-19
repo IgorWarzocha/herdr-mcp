@@ -126,12 +126,17 @@ test('real MCP transport requires auth, validates origin, discovers and executes
   const client = new Client({name: 'test', version: '1'});
   t.after(() => client.close());
   await client.connect(new StreamableHTTPClientTransport(url, {requestInit: {headers: {Authorization: 'Bearer test-token'}}}));
-  assert.deepEqual((await client.listTools()).tools.map(tool => tool.name), ['herdr_skill', 'herdr']);
+  const tools = (await client.listTools()).tools;
+  assert.deepEqual(tools.map(tool => tool.name), ['herdr_skill', 'herdr']);
+  assert.match(tools[1].description, /configured wait ceiling is 90000 ms/);
+  assert.match(tools[1].description, /Machine discovery, machine routing, session switching and maintenance are disabled/);
+  assert.match(tools[1].description, /Use agent get/);
   const result = await client.callTool({name: 'herdr', arguments: {command: 'send w1:p1 "hello"'}});
   assert.equal(result.isError, false);
   assert.deepEqual(calls.at(-1), ['agent', 'prompt', 'w1:p1', '--', 'hello']);
   for (const [args, hint] of [
     [{args: ['server', 'stop']}, /maintenance are disabled/],
+    [{args: ['machine', 'list']}, /disabled/],
     [{args: ['pane', 'list', '--session', 'other']}, /routing are fixed/],
     [{args: [1]}, /array of at most 256 strings/],
     [{command: 'read "'}, /Unclosed quote/],
@@ -148,6 +153,21 @@ test('real MCP transport requires auth, validates origin, discovers and executes
   }
   const skill = await client.callTool({name: 'herdr_skill', arguments: {}});
   assert.equal(skill.content[0].text, next.stdout);
+  next = {exit_code: 1, stdout: '', stderr: JSON.stringify({error: {
+    code: 'agent_not_idle', message: 'private upstream diagnostic',
+  }})};
+  const historyRead = await client.callTool({name: 'herdr', arguments: {args: ['agent', 'read', 'w1:p1', '--lines', '200']}});
+  const historyError = JSON.parse(historyRead.content[0].text);
+  assert.equal(historyRead.isError, true);
+  assert.equal(historyError.code, 'agent_not_idle');
+  assert.match(historyError.next, /--source visible/);
+  assert.doesNotMatch(historyRead.content[0].text, /private upstream/);
+  assert.deepEqual(calls.at(-1), ['agent', 'read', 'w1:p1', '--lines', '200']);
+  next = {exit_code: 0, stdout: 'A reply is visible while the agent is working.', stderr: ''};
+  const screenRead = await client.callTool({name: 'herdr', arguments: {args: ['agent', 'read', 'w1:p1', '--source', 'visible']}});
+  assert.equal(screenRead.isError, false);
+  assert.equal(JSON.parse(screenRead.content[0].text).stdout, next.stdout);
+  assert.deepEqual(calls.at(-1), ['agent', 'read', 'w1:p1', '--source', 'visible']);
   next = {exit_code: 2, stdout: '', stderr: 'CLI diagnostic dump'};
   for (const args of [['pane', 'unknown'], ['pane', 'list', '--unknown']]) {
     const rejected = await client.callTool({name: 'herdr', arguments: {args}});
