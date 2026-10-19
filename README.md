@@ -42,7 +42,7 @@ Use a dedicated Herdr session for remote agents. For stronger separation, use a 
 
 Give a coding agent with terminal access to your Herdr machine this prompt:
 
-> Read https://github.com/IgorWarzocha/herdr-mcp and follow its AGENTS.md setup flow. Inspect my environment first, explain what I need, and ask which tunnel and MCP client I want. Set it up with a check after each step. Stop for human-only actions, preserve existing services, and give me the connector settings without putting the token in chat.
+> Read https://github.com/IgorWarzocha/herdr-mcp/blob/main/SETUP.md and follow its setup flow. Inspect my environment first, explain what I need, and ask which tunnel and MCP client I want. Set it up with a check after each step. Stop for human-only actions, preserve existing services, and give me the connector settings without putting the token in chat.
 
 The agent handles installation, service configuration, the selected tunnel and connection checks. **You handle account logins, administrator approvals, accepting the access risk and pasting the token into your client.** It will tell you when one of those steps is needed.
 
@@ -52,7 +52,7 @@ Once connected, ask:
 
 Sending a message confirms delivery, not that the agent has finished. Ask it to read the response afterwards. Waiting tracks agent state rather than a particular message.
 
-For manual setup or troubleshooting, see the [setup flow](AGENTS.md), [platform recipes](docs/setup.md) and [usage and error guide](SKILL.md).
+For manual setup or troubleshooting, see the [setup walkthrough](SETUP.md), [platform recipes](docs/setup.md) and [usage and error guide](SKILL.md).
 
 ## Licence
 

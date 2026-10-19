@@ -1,6 +1,6 @@
 # Setup reference
 
-Follow [AGENTS.md](../AGENTS.md) for the ordered setup and verification flow. These recipes run on the machine hosting Herdr. Inspect existing services before changing them.
+Follow [SETUP.md](../SETUP.md) for the ordered setup and verification flow. These recipes run on the machine hosting Herdr. Inspect existing services before changing them.
 
 ## Native Windows foreground setup
 
@@ -111,6 +111,6 @@ Use a named tunnel with a hostname the user owns. Do not use a temporary quick-t
 5. Start `cloudflared tunnel --config "$CF_CONFIG" run herdr-mcp` in a separate foreground terminal. **Verify:** the connector reports an established tunnel, then check `https://herdr-mcp.example.com/mcp` from outside the hosting machine. It must return HTTP 401 with `bad_token` without a token and discover both tools with the existing bearer token. A Cloudflare login page is not a successful MCP connection. Do not remove an existing Access policy without approval.
 6. For background use, configure a separately named systemd user service or launchd agent to run the same command with absolute paths. On Windows, use WSL2 and its Linux supervisor, or explicitly leave the tunnel in the foreground. Never replace a shared `cloudflared` service. **Verify:** stop only the foreground process you created, start the new supervisor, confirm it remains running and repeat the external authenticated check. Ask for administrator approval if required.
 
-Set `URL=https://herdr-mcp.example.com/mcp`, substituting the real hostname, then return to AGENTS.md step 5. The Cloudflare origin target is the bridge root. The client URL includes `/mcp`. Tailscale's path proxy instead targets the local `/mcp` directly.
+Set `URL=https://herdr-mcp.example.com/mcp`, substituting the real hostname, then return to [SETUP.md step 5](../SETUP.md#5-connect-clients-human-pastes-the-token). The Cloudflare origin target is the bridge root. The client URL includes `/mcp`. Tailscale's path proxy instead targets the local `/mcp` directly.
 
 See Cloudflare's [locally managed tunnel guide](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/local-management/create-local-tunnel/) for provider-specific login and installation steps.

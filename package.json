@@ -9,7 +9,7 @@
   "keywords": ["mcp", "herdr", "terminal", "agents", "cursor", "grok"],
   "type": "module",
   "bin": { "herdr-mcp": "bin/herdr-mcp.mjs" },
-  "files": ["bin", "src", "systemd", "launchd", "docs", "scripts", "README.md", "AGENTS.md", "SKILL.md", "LICENSE", ".env.example"],
+  "files": ["bin", "src", "systemd", "launchd", "docs", "scripts", "README.md", "SETUP.md", "SKILL.md", "LICENSE", ".env.example"],
   "engines": { "node": ">=22" },
   "scripts": {
     "start": "node bin/herdr-mcp.mjs",

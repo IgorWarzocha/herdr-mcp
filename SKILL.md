@@ -3,11 +3,11 @@ name: herdr-mcp-setup
 description: "Use when setting up herdr-mcp or operating Herdr through its MCP tools."
 ---
 
-For installation, follow [AGENTS.md](AGENTS.md): inspect, explain requirements, ask which tunnel and client, then verify each setup step. Platform recipes are in [docs/setup.md](docs/setup.md), and connector templates in [docs/clients.md](docs/clients.md). Stop when verification fails. Do not change a live installation during repository work.
+For installation, follow [SETUP.md](SETUP.md): inspect, explain requirements, ask which tunnel and client, then verify each setup step. Platform recipes are in [docs/setup.md](docs/setup.md), and connector templates in [docs/clients.md](docs/clients.md). Stop when verification fails.
 
 Herdr runs on Linux, macOS and native Windows. Use systemd on Linux, the shipped launchd plist on macOS, or WSL2 with systemd for the Windows background setup. Native Windows foreground setup is in docs/setup.md. Keep Herdr, Node and the bridge in the same OS environment. A WSL bridge cannot control native Windows Herdr through its local socket.
 
-The token gives shell-equivalent access. Recommend a dedicated Herdr session. **HUMAN:** accept the risks, complete provider logins and administrator approvals, and paste the existing token into the client. Never put it into chat or tracked files. Never run Serve/Funnel reset or alter another service's route or port exposure. Use AGENTS.md's Quirks table for setup failures.
+The token gives shell-equivalent access. Recommend a dedicated Herdr session. **HUMAN:** accept the risks, complete provider logins and administrator approvals, and paste the existing token into the client. Never put it into chat or tracked files. Never run Serve/Funnel reset or alter another service's route or port exposure. Use SETUP.md's Quirks table for setup failures.
 
 ## Day-to-day use
 
