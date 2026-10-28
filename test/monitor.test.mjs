@@ -1,25 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRunner, executeCommand, normalize, prepareWait } from '../src/bridge.mjs';
+import { createRunner, executeCommand, prepareWait } from '../src/bridge.mjs';
 import { toolResult } from '../src/errors.mjs';
 import { tmpdir } from 'node:os';
 import { EventEmitter, once } from 'node:events';
 import { createServer, request } from 'node:http';
-import { createHandler } from '../src/server.mjs';
+import { createHandler } from '../src/http.mjs';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import { snapshot, snapshotResult } from './fixtures/panes.mjs';
 
 const ok = { exit_code: 0, stdout: '', stderr: '', timed_out: false, truncated: false, cancelled: false };
 const expired = { ...ok, exit_code: 1, stderr: '{"id":"cli:wait","error":{"code":"timeout","message":"timed out waiting for agent status"}}' };
 
 test('only read-only waits get a long budget and explicit durations cannot exceed the ceiling', () => {
-  const friendly = normalize({args: ['wait', 'w1:p1']});
-  assert.deepEqual(prepareWait(friendly).args, ['agent', 'wait', 'w1:p1', '--timeout', '90000']);
+  assert.deepEqual(prepareWait(['agent', 'wait', 'w1:p1']).args, ['agent', 'wait', 'w1:p1', '--timeout', '90000']);
   assert.equal(prepareWait(['agent', 'wait', 'worker', '--timeout', '900000']).timeout_ms, 90000);
   assert.equal(prepareWait(['agent', 'wait', 'worker', '--timeout=20000']).timeout_ms, 20000);
   assert.equal(prepareWait(['agent', 'wait', 'worker'], 120000).timeout_ms, 120000);
   assert.equal(prepareWait(['agent', 'wait', 'worker', '--timeout=600000'], 600000).timeout_ms, 600000);
-  assert.deepEqual(prepareWait(['pane', 'wait-output', 'w1:p1', '--contains', 'done']).args,
-    ['pane', 'wait-output', 'w1:p1', '--contains', 'done', '--timeout', '90000']);
+  assert.deepEqual(prepareWait(['pane', 'wait-output', 'w1:p1', '--match', 'done']).args,
+    ['pane', 'wait-output', 'w1:p1', '--match', 'done', '--timeout', '90000']);
   for (const args of [['agent', 'prompt', 'worker', 'work', '--wait'], ['pane', 'run', 'w1:p1', 'wait'],
     ['agent', 'wait', '--help'], ['api', 'call', 'agent.wait']]) assert.equal(prepareWait(args), null);
   for (const args of [['agent', 'wait'], ['agent', 'wait', 'worker', '--timeout'],
@@ -50,7 +50,7 @@ test('watchdog expiry is a wait outcome, but other failures do not become waits'
   const watchdog = { ...ok, exit_code: null, timed_out: true };
   const failedProbe = { ...ok, exit_code: 1, stderr: '{"error":{"code":"pane_not_found"}}' };
   const run = { async run(args) { return args[1] === 'get' ? failedProbe : watchdog; } };
-  const wait = await executeCommand(run, ['pane', 'wait-output', 'w1:p1', '--contains', 'done']);
+  const wait = await executeCommand(run, ['pane', 'wait-output', 'w1:p1', '--match', 'done']);
   assert.equal(wait.code, 'wait_timeout');
   assert.equal(wait.state, 'unknown');
   assert.equal(wait.state_error.code, 'pane_not_found');
@@ -66,24 +66,23 @@ test('watchdog expiry is a wait outcome, but other failures do not become waits'
   assert.equal(malformed.state_error.code, 'bridge_error');
 });
 
-test('MCP discovery advertises the configured ceiling and 25-second waits preserve state and retry advice', async t => {
+test('friendly 25-second waits preserve state and retry budgets over MCP', async t => {
   for (const waitMaxMs of [90000, 25000]) {
     const calls = [];
     const http = createServer(createHandler({token: 'wait-test', origins: [], waitMaxMs, runner: {
       async run(args, signal, options) {
         calls.push({args, options});
+        if (args[0] === 'api') return snapshotResult(snapshot());
         return args[1] === 'get' ? {...ok, stdout: JSON.stringify({result: {agent: {agent_status: 'working'}}})} : expired;
       },
     }}));
     t.after(() => { http.close(); http.closeAllConnections(); });
     http.listen(0, '127.0.0.1'); await once(http, 'listening');
-    const client = new Client({name: 'wait-test', version: '1'});
+    const client = new Client({name: 'wait-test', version: '1'}, {versionNegotiation: {mode: {pin: '2026-07-28'}}});
     t.after(() => client.close());
     await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${http.address().port}/mcp`), {
       requestInit: {headers: {Authorization: 'Bearer wait-test'}},
     }));
-    const tool = (await client.listTools()).tools.find(tool => tool.name === 'herdr');
-    assert.ok(tool.description.includes(`configured wait ceiling is ${waitMaxMs} ms`));
     const requests = waitMaxMs === 90000 ? [['--timeout', '25000']] : [[], ['--timeout', '75000']];
     for (const options of requests) {
       // Repeated observations must retain the shorter budget, not resend input.
@@ -118,6 +117,7 @@ test('disconnecting an HTTP wait terminates its subprocess and releases capacity
   const childRunner = createRunner({binary: process.execPath, home: tmpdir(), path: process.env.PATH, concurrency: 1});
   const events = new EventEmitter();
   const runner = { async run(args, signal, options) {
+    if (args[0] === 'api') return snapshotResult(snapshot());
     const pending = childRunner.run(['-e', 'setInterval(()=>{},1000)'], signal, options);
     events.emit('started');
     const result = await pending;
@@ -131,24 +131,24 @@ test('disconnecting an HTTP wait terminates its subprocess and releases capacity
   const url = new URL(`http://127.0.0.1:${http.address().port}/mcp`);
 
   // More than the handler's 16 request slots also catches HTTP capacity leaks.
-  for (const modern of [false, true]) for (let i = 0; i < 17; i++) {
+  for (let i = 0; i < 17; i++) {
     const deadline = AbortSignal.timeout(3000);
     const started = once(events, 'started', {signal: deadline});
     const finished = once(events, 'finished', {signal: deadline});
     const client = request(url, {method: 'POST', headers: {
       Authorization: 'Bearer disconnect-test', 'Content-Type': 'application/json',
       Accept: 'application/json, text/event-stream',
-      ...(modern ? { 'MCP-Protocol-Version': '2026-07-28', 'MCP-Method': 'tools/call', 'MCP-Name': 'herdr' } : {}),
+      'MCP-Protocol-Version': '2026-07-28', 'MCP-Method': 'tools/call', 'MCP-Name': 'herdr',
     }});
     // Closing our own connection can produce ECONNRESET before response headers.
     client.on('error', () => {});
     client.end(JSON.stringify({jsonrpc: '2.0', id: i + 1, method: 'tools/call', params: {
-      name: 'herdr', arguments: {args: ['wait', 'worker']},
-      ...(modern ? { _meta: {
+      name: 'herdr', arguments: {args: ['wait', 'reviewer']},
+      _meta: {
         'io.modelcontextprotocol/protocolVersion': '2026-07-28',
         'io.modelcontextprotocol/clientInfo': {name: 'disconnect-test', version: '1'},
         'io.modelcontextprotocol/clientCapabilities': {},
-      } } : {}),
+      },
     }}));
     await started;
     // Cancel even before the first SSE frame. The v2 adapter does not flush

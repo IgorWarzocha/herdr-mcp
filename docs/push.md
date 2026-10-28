@@ -21,7 +21,7 @@ The receiver explicitly selects protocol `2026-07-28`. SDK v2's default client m
 3. Read `herdr://panes` immediately, then again when its update notification arrives. A notification invalidates the resource; it does not contain the new directory.
 4. Close the subscription when finished. Watch `subscription.closed` for a remote or graceful server closure. On reconnect, subscribe again and read again. There is no replay queue.
 
-The resource contains `{ "code": "ok", "panes": [...] }`. Each pane has `pane_id`, `workspace_id`, `workspace_label`, `tab_id`, `tab_label`, `name`, `terminal_title`, `agent`, `agent_status`, `state_change_seq`, `completion_seq` and `cwd`. Missing optional labels are `null`. Match UI labels to choose a pane, then target its ID. Duplicate labels are not collapsed or accepted as new targeting aliases.
+The resource contains `{ "code": "ok", "panes": [...] }`. Each pane has `pane_id`, `workspace_id`, `workspace_label`, `tab_id`, `tab_label`, `name`, `terminal_title`, `agent`, `agent_status`, `state_change_seq`, `completion_seq` and `cwd`. Missing optional labels are `null`. Friendly commands accept unique labels. Duplicate labels are not collapsed and require a pane ID to disambiguate.
 
 The friendly `list` tool command returns the same pane directory in its usual result envelope's `stdout`. Raw `agent list`, `pane list`, `tab list` and `workspace list` still return the CLI's own output.
 
@@ -31,4 +31,4 @@ Herdr's CLI does not provide the subscription stream used here. The bridge sampl
 
 Changes include pane membership, labels, terminal titles and reported agent state. They do not include terminal output. Read the pane when you need its screen or history. Reported idle or done still does not prove that a particular message finished.
 
-Up to eight subscription streams share the existing authenticated endpoint. Legacy clients retain tools and resource reads but are not offered subscriptions. Neither this protocol nor the bridge guarantees that a hosted client starts a new model turn when notified. Grok Bot and Cursor support must be verified separately. Keep using blocking waits where the client cannot deliver push updates into the workflow.
+Up to eight subscription streams share the existing authenticated endpoint. Older protocols are rejected. Neither this protocol nor the bridge guarantees that a hosted client starts a new model turn when notified. Grok Bot and Cursor support must be verified separately. Keep using blocking waits where the client cannot deliver push updates into the workflow.

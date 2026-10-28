@@ -2,7 +2,9 @@
 
 Use the URL verified during setup. These examples use `https://herdr-mcp.example.com/mcp`. A Tailscale route instead ends in `/herdr-mcp`. The setup agent should substitute the real URL before handing over a template.
 
-**HUMAN:** paste the existing token directly into the client's protected header field, or load it into the desktop client's environment. Never send it through chat. This server uses Streamable HTTP and a bearer header, not OAuth or the legacy SSE transport.
+**The client must support MCP 2026-07-28 over Streamable HTTP.** Older protocols are rejected. A connector that only supports the 2025 protocol cannot use this release. Confirm protocol support in the actual client before configuring it. The templates below specify endpoint and authentication, not proof of protocol compatibility.
+
+**HUMAN:** paste the existing token directly into the client's protected header field, or load it into the desktop client's environment. Never send it through chat. This server uses a bearer header, not OAuth.
 
 ## Grok Bot remote connector
 
@@ -62,7 +64,7 @@ For a client that wants a bearer-token field rather than a header, enter only th
 
 ## Verify discovery and long waits
 
-The bridge supports the official MCP 2026-07-28 subscription protocol and legacy Streamable HTTP clients. Push requires client support beyond tool discovery. See [push clients](push.md) for the included receiver and reconnect contract. Grok Bot and Cursor notification delivery into model turns has not been verified.
+The bridge requires the official MCP 2026-07-28 protocol. With SDK v2, select `versionNegotiation: { mode: { pin: '2026-07-28' } }` when constructing `Client`. The SDK's default mode is not sufficient. Push requires notification handling beyond tool discovery. See [push clients](push.md). Grok Bot and Cursor notification delivery into model turns has not been verified.
 
 Ask the connected agent to call `herdr_skill`, then `herdr` with `{"args":["pane","list"]}`. Both must succeed before calling setup complete.
 

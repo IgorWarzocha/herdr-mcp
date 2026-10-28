@@ -4,7 +4,7 @@ Follow [SETUP.md](../SETUP.md) for the ordered setup and verification flow. Thes
 
 ## Native Windows foreground setup
 
-Install native Node 22+ and [Herdr for Windows](https://herdr.dev/docs/windows-beta/). Open Herdr so its server is running, then in PowerShell:
+Install current Node at least 26.12.1, Pi and [Herdr for Windows](https://herdr.dev/docs/windows-beta/), at least 0.9.5. Open Herdr so its server is running, then in PowerShell:
 
 ```powershell
 git clone https://github.com/IgorWarzocha/herdr-mcp "$HOME/herdr-mcp"
@@ -12,6 +12,7 @@ Set-Location "$HOME/herdr-mcp"
 npm ci --omit=dev
 npm run token
 npm run doctor
+npm run check:live
 npm start
 ```
 
@@ -19,7 +20,7 @@ Use a native `herdr.exe`, not a `.cmd` or `.bat` wrapper. Stop with Ctrl+C. The 
 
 ## Keep the bridge running
 
-These recipes supervise the bridge, not Herdr or your tunnel. Those must also be running. Stop a foreground `npm start` before starting a service on the same port.
+These recipes supervise the bridge, not Herdr or your tunnel. Those must also be running. Run `npm run check:live` before stopping or restarting a bridge. The installed Herdr and Pi smoke must pass. Use the service's binary and PATH settings for the check. Stop a foreground `npm start` before starting a service on the same port.
 
 ### Linux: systemd user service
 
@@ -29,7 +30,7 @@ mkdir -p ~/.config/herdr-mcp ~/.config/systemd/user
 [ -f ~/.config/systemd/user/herdr-mcp.service ] || cp systemd/herdr-mcp.service ~/.config/systemd/user/
 ```
 
-Edit `service.env`: put absolute directories for Herdr 0.9+ and Node first in `PATH`. Set a custom token or socket path if needed. Edit `WorkingDirectory` in the copied unit if the repository is not `~/herdr-mcp`. Do not overwrite an existing service without reviewing it.
+Edit `service.env`: put absolute directories for current Herdr and Node first in `PATH`. Set a custom token or socket path if needed. Edit `WorkingDirectory` in the copied unit if the repository is not `~/herdr-mcp`. Do not overwrite an existing service without reviewing it.
 
 ```sh
 systemctl --user daemon-reload
@@ -61,7 +62,7 @@ launchctl print "gui/$(id -u)/dev.herdr-mcp"   # look for state = running
 tail -n 20 ~/Library/Logs/herdr-mcp.log
 ```
 
-For an already loaded agent, use `launchctl bootout "gui/$(id -u)/dev.herdr-mcp"` before bootstrapping an edited plist. To restart without changing settings: `launchctl kickstart -k "gui/$(id -u)/dev.herdr-mcp"`.
+For an already loaded agent, run `npm run check:live`, then use `launchctl bootout "gui/$(id -u)/dev.herdr-mcp"` before bootstrapping an edited plist. To restart without changing settings, run `npm run check:live` with the plist's environment first, then `launchctl kickstart -k "gui/$(id -u)/dev.herdr-mcp"`. Run `npm run check:connection` with those same settings afterwards. The automatic `npm run restart` wrapper is Linux-only.
 
 This LaunchAgent starts at login and restarts the bridge if it exits. It does not run while logged out or keep a sleeping Mac awake. A headless, pre-login service needs a separately configured LaunchDaemon.
 

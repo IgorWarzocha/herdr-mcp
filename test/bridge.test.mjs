@@ -7,7 +7,14 @@ import { join } from 'node:path';
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { commandEnvironment, createRunner, normalize, splitCommand } from '../src/bridge.mjs';
-import { config, createHandler, readToken } from '../src/server.mjs';
+import { checkHerdrVersion, config, readToken } from '../src/server.mjs';
+import { createHandler } from '../src/http.mjs';
+import { snapshot, snapshotResult } from './fixtures/panes.mjs';
+
+test('startup rejects older Herdr rather than enabling compatibility branches', () => {
+  for (const version of ['herdr 0.9.4', 'herdr 0.8.99', 'invalid', 'herdr 0.9']) assert.throws(() => checkHerdrVersion(version));
+  for (const version of ['herdr 0.9.5', 'herdr 0.10.0', 'herdr 1.0.0']) assert.equal(checkHerdrVersion(version), version);
+});
 
 test('platform defaults match Herdr and explicit socket overrides win', () => {
   assert.equal(config({}).waitMaxMs, 90000);
@@ -63,10 +70,10 @@ test('quote parser preserves literal payloads without shell expansion', () => {
 });
 
 test('aliases and raw commands share routing and explicit-input policy', () => {
-  assert.deepEqual(normalize({ command: 'send w1:p1 "hi there"' }), ['agent', 'prompt', 'w1:p1', '--', 'hi there']);
-  assert.deepEqual(normalize({ args: ['send', 'w1:p1', '--session=other'] }), ['agent', 'prompt', 'w1:p1', '--', '--session=other']);
-  assert.deepEqual(normalize({ args: ['read', 'w1:p1', '--lines', '20'] }), ['pane', 'read', 'w1:p1', '--lines', '20']);
-  assert.deepEqual(normalize({ args: ['read', 'w1R:p7'] }), ['pane', 'read', 'w1R:p7']);
+  assert.deepEqual(normalize({ command: 'send "MCP bridge" hi there' }), ['send', 'MCP bridge', 'hi there']);
+  assert.deepEqual(normalize({ args: ['send', 'w1:p1', '--session=other'] }), ['send', 'w1:p1', '--session=other']);
+  assert.deepEqual(normalize({ args: ['read', 'w1:p1', '--lines', '20'] }), ['read', 'w1:p1', '--lines', '20']);
+  assert.deepEqual(normalize({ args: ['read', 'w1R:p7'] }), ['read', 'w1R:p7']);
   assert.deepEqual(normalize({ args: ['pane', 'send-text', 'w1:p1', '--', '--session'] }), ['pane', 'send-text', 'w1:p1', '--', '--session']);
   for (const input of [{}, {args: [], command: ''}, {args: ['--session', 'other', 'pane', 'list']},
     {args: ['pane', 'list', '--session', 'other']}, {args: ['pane', 'list', '--session=other']},
@@ -106,11 +113,14 @@ test('timeout, cancellation and concurrency release the process slot', async () 
   assert.equal((await run.run(['-e', ''])).exit_code, 0);
 });
 
-for (const mode of ['legacy', { pin: '2026-07-28' }]) test(`real MCP ${typeof mode === 'string' ? mode : mode.pin} transport preserves auth and both tools`, async t => {
+test('current MCP transport preserves auth, both tools and literal agent submission', async t => {
   const calls = [];
   let next = {exit_code: 0, stdout: 'Installed guide\nKeep this exactly.\n', stderr: '', timed_out: false, truncated: false, cancelled: false};
   const http = createServer(createHandler({ token: 'test-token', origins: [], runner: {
-    async run(args) { calls.push(args); if (next instanceof Error) throw next; return next; }
+    async run(args) {
+      calls.push(args); if (next instanceof Error) throw next;
+      return args[0] === 'api' ? snapshotResult(snapshot()) : next;
+    }
   }}));
   http.listen(0, '127.0.0.1'); await once(http, 'listening');
   const url = new URL(`http://127.0.0.1:${http.address().port}/mcp`);
@@ -122,18 +132,15 @@ for (const mode of ['legacy', { pin: '2026-07-28' }]) test(`real MCP ${typeof mo
   }
   assert.equal(calls.length, 0);
   assert.equal((await fetch(url, {method: 'POST', headers: {Authorization: 'Bearer test-token', Origin: 'https://evil.example'}})).status, 403);
-  const client = new Client({name: 'test', version: '1'}, {versionNegotiation: {mode}});
+  const client = new Client({name: 'test', version: '1'}, {versionNegotiation: {mode: {pin: '2026-07-28'}}});
   t.after(() => client.close());
   await client.connect(new StreamableHTTPClientTransport(url, {requestInit: {headers: {Authorization: 'Bearer test-token'}}}));
-  assert.equal(client.getNegotiatedProtocolVersion(), typeof mode === 'string' ? '2025-11-25' : mode.pin);
+  assert.equal(client.getNegotiatedProtocolVersion(), '2026-07-28');
   const tools = (await client.listTools()).tools;
   assert.deepEqual(tools.map(tool => tool.name), ['herdr_skill', 'herdr']);
-  assert.match(tools[1].description, /configured wait ceiling is 90000 ms/);
-  assert.match(tools[1].description, /Machine discovery, machine routing, session switching and maintenance are disabled/);
-  assert.match(tools[1].description, /Use agent get/);
   const result = await client.callTool({name: 'herdr', arguments: {command: 'send w1:p1 "hello"'}});
   assert.equal(result.isError, false);
-  assert.deepEqual(calls.at(-1), ['agent', 'prompt', 'w1:p1', '--', 'hello']);
+  assert.deepEqual(calls.at(-1), ['agent', 'prompt', 'w1:p1', 'hello']);
   for (const [args, hint] of [
     [{args: ['server', 'stop']}, /maintenance are disabled/],
     [{args: ['machine', 'list']}, /disabled/],

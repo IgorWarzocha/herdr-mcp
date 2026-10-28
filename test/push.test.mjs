@@ -4,7 +4,7 @@ import { once, EventEmitter } from 'node:events';
 import { createServer } from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
-import { createHandler } from '../src/server.mjs';
+import { createHandler } from '../src/http.mjs';
 import { createPaneUpdates } from '../src/pane-updates.mjs';
 import { PANES_URI } from '../src/directory.mjs';
 import { ok, snapshot, snapshotResult } from './fixtures/panes.mjs';
@@ -18,8 +18,8 @@ async function host(t, runner, options = {}) {
   return { handler, url: new URL(`http://127.0.0.1:${http.address().port}/mcp`) };
 }
 
-async function connect(t, url, mode = { pin: '2026-07-28' }) {
-  const client = new Client({ name: 'push-test', version: '1' }, { versionNegotiation: { mode } });
+async function connect(t, url) {
+  const client = new Client({ name: 'push-test', version: '1' }, { versionNegotiation: { mode: { pin: '2026-07-28' } } });
   const frames = [];
   t.after(() => client.close());
   await client.connect(new StreamableHTTPClientTransport(url, {
@@ -89,18 +89,16 @@ test('official modern subscriptions acknowledge first, filter updates, and expos
   assert.equal(await empty.closed, 'graceful');
 });
 
-test('legacy tools and resource reads work without advertising undeliverable legacy subscriptions', async t => {
-  const calls = [];
-  const { url } = await host(t, { async run(args) { calls.push(args); return snapshotResult(snapshot()); } });
-  const { client } = await connect(t, url, 'legacy');
-  assert.equal(client.getServerCapabilities().resources.subscribe, false);
-  const result = await client.callTool({ name: 'herdr', arguments: { args: ['list'] } });
-  assert.equal(result.isError, false);
-  assert.equal(JSON.parse(JSON.parse(result.content[0].text).stdout).panes[0].tab_label, 'MCP bridge');
-  assert.equal(JSON.parse((await client.readResource({ uri: PANES_URI })).contents[0].text).code, 'ok');
-  await assert.rejects(client.listen({ resourceSubscriptions: [PANES_URI] }));
-  await assert.rejects(client.subscribeResource({ uri: PANES_URI }));
-  assert.deepEqual(calls, [['api', 'snapshot'], ['api', 'snapshot']]);
+test('old protocol requests are rejected before any Herdr command runs', async t => {
+  let calls = 0;
+  const { url } = await host(t, { async run() { calls++; return snapshotResult(snapshot()); } });
+  const response = await fetch(url, { method: 'POST', headers: {
+    Authorization: 'Bearer push-test', 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream',
+  }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'herdr', arguments: { args: ['list'] } } }) });
+  const body = await response.json();
+  assert.ok(body.error);
+  assert.match(body.error.message, /protocol/i);
+  assert.equal(calls, 0);
 });
 
 test('subscription limits leave room for tool calls and disconnected streams release capacity', { timeout: 5000 }, async t => {

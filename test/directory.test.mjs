@@ -32,7 +32,7 @@ test('friendly list uses one snapshot, raw lists and explicit targets remain pas
   for (const args of [['agent', 'list'], ['pane', 'list'], ['tab', 'list'], ['workspace', 'list']]) {
     assert.deepEqual(normalize({ args }), args);
   }
-  assert.deepEqual(normalize({ args: ['read', 'w2:p1', '--source', 'visible'] }), ['pane', 'read', 'w2:p1', '--source', 'visible']);
+  assert.deepEqual(normalize({ args: ['read', 'w2:p1', '--source', 'visible'] }), ['read', 'w2:p1', '--source', 'visible']);
 });
 
 test('missing, inconsistent and truncated inventories fail explicitly instead of guessing targets', async () => {

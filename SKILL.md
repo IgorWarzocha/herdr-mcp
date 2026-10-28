@@ -18,25 +18,34 @@ Call `herdr_skill` once to read the installed CLI guide. Then use `herdr` with a
 {"args":["read","w1:p1","--lines","80"]}
 {"args":["send","w1:p1","Review the current changes"]}
 {"args":["wait","w1:p1"]}
+{"args":["reply","w1:p1"]}
 ```
 
-`list` includes all panes, including shells. Match the user's name against `workspace_label`, `tab_label`, `name` and `terminal_title`, then use the returned `pane_id`. A tab label is not an agent name. Duplicate labels remain separate panes: ask if the intended target is ambiguous. Raw `agent list`, `pane list`, `tab list` and `workspace list` retain the CLI's own output.
+`list` includes all panes, including shells. Friendly commands resolve pane IDs, agent names, tab labels, workspace labels and terminal titles. Duplicate labels require an explicit pane ID. No input is sent when the target is ambiguous. Raw CLI commands retain their own target syntax and output.
 
-`send` acknowledges delivery, not that the turn started or finished. Do not resend merely because status has not changed. The bridge pins the session: machine discovery (`machine list`), machine routing and session switching are disabled. Do not use `--current` or `--session`.
+`send` prompts an agent or runs the text in an available shell pane. It acknowledges delivery, not that the turn started or finished. Do not resend merely because status has not changed. The bridge pins the session: machine discovery (`machine list`), machine routing and session switching are disabled. Do not use `--current` or `--session`. A payload consisting solely of a routing flag such as `--session=other` is rejected because Herdr would interpret it as routing rather than text.
 
 Use `agent get <target>` for reported status. A list drawn inside a pane is just terminal content and may be stale or describe a different agent.
 
 ### Reading a working agent
 
-Use `read <pane-id> --source visible` for the current screen. It is not a transcript; requesting more lines does not recover unavailable history. The pane-ID `read` alias uses `pane read`.
+`read <target>` defaults to `recent-unwrapped`. Use `--source visible` for the current screen. Neither guarantees a full transcript; requesting more lines does not recover unavailable history.
 
-On Herdr 0.9.4, `agent read <target> --lines 200` can return `agent_not_idle` while Pi is working: capturing its alternate-screen history requires scrolling while idle. Use `--source visible` to inspect the screen without that capture, or wait until idle and retry the original read. The bridge does not silently substitute screen output for requested history.
+Terminal history capture can return `agent_not_idle` while an agent is working. Use `--source visible` to inspect the screen, or wait until idle and retry the history read. Requested history is never silently replaced with screen output.
+
+### Clean Pi replies
+
+Use `reply <target>` for Pi's latest completed assistant text, without terminal wrapping or borders. The bridge follows the exact session path reported by Herdr and returns text blocks only, never reasoning or tool payloads. It does not search other sessions by working directory.
+
+The result identifies `message_id`, `agent_status` and `newer_activity`. It is the latest completed reply on the **last persisted branch**, not proof the current task has finished. Pi can switch its live branch before writing another record. Failed, aborted or still-working turns may leave an older completed reply as the latest available one.
+
+Long replies are paged. When `next_offset` is not null, call `reply <target> --offset <next_offset> --message-id <message_id>`. Offsets count Unicode characters. `--limit` accepts 1 to 30000 characters, default 16000. A changed latest message rejects continuation rather than mixing replies. `reply_unavailable` means no reliable completed reply could be read.
 
 ## Watching a pane
 
 If the client supports MCP 2026-07-28 subscriptions, subscribe to `herdr://panes` and re-read that resource on `notifications/resources/updated`. Read once after subscribing or reconnecting too. Updates cover names and reported state, not terminal transcripts or per-message completion. Only use push instead of waiting when the client actually delivers notifications to your workflow. See [push clients](docs/push.md). Otherwise use the wait loop below.
 
-The default wait ceiling is 90 seconds. A wait returns earlier when Herdr matches idle, done or blocked. The `herdr` tool description carries the blocking-call guidance. The separate `herdr_skill` tool returns the installed Herdr guide unchanged.
+The default wait ceiling is 90 seconds. An agent wait returns earlier on idle, done or blocked. A shell wait returns when its shell is the foreground process again. `wait <target> --match <text>` waits for terminal output on either kind of pane. The separate `herdr_skill` tool returns the installed Herdr guide unchanged.
 
 - On `ok`, inspect Herdr's returned state and read the output. Blocked means the agent needs attention, not that it finished.
 - On `wait_timeout` with `state: working`, the wait expired without a match. If looking for a reply, read with `--source visible`: an answer may already be on screen while the agent continues working. If the result is still needed, continue the wait loop with the same target, condition and timeout rather than resending the task.
@@ -58,6 +67,9 @@ Waits track state, not individual message turns. `pane wait-output` searches exi
 | `herdr_not_running` | Start Herdr or check the bridge's pinned socket. A dead socket does not prove the session was deleted. | Yes |
 | `session_missing` | Restore the intended session or correct the configured socket. Used only when Herdr explicitly reports a missing session. | Yes |
 | `pane_not_found` | Refresh `list` or `pane list` and choose the intended current ID. | If the target is absent or ambiguous |
+| `ambiguous_target` | Choose the intended pane ID from the returned candidates. No input was sent. | If intent is unclear |
+| `target_busy` | Wait for the shell's foreground command to finish or inspect the pane. No input was sent. | If intervention is needed |
+| `reply_unavailable` | Follow `next`. Pi may not have saved a completed reply, or its session identity may be unavailable. | If it persists |
 | `agent_not_idle` | Read with `--source visible`, or wait until idle before retrying history capture. | No |
 | `bad_token` | Copy the existing token into the client's bearer header. Do not rotate it automatically. | Yes, private client entry only |
 | `wait_timeout` | Check state; read visible output if looking for a reply, even while working. Repeat the wait if the result is still needed. | Only for a blocker or overall deadline |

@@ -35,10 +35,11 @@ For a custom socket, export `HERDR_MCP_SOCKET` too. Carry the same values into t
 
 ## 0. Preflight
 ```sh
-node -p 'process.platform + " " + process.version'   # Node >= 22
+node -p 'process.platform + " " + process.version'   # Node >= 26.12.1
 command -v node                           # resolve version-manager shims (Q2)
 type -a herdr                             # inspect all PATH candidates (Q3)
-herdr --version                           # need >= 0.9
+herdr --version                           # current stable, at least 0.9.5
+pi --version                              # required by the live deployment smoke
 node -e 'const s=require("node:net").createServer(); s.once("error",e=>{console.error(e.code);process.exitCode=1}); s.listen(Number(process.env.PORT||8792),"127.0.0.1",()=>{console.log("port free");s.close()})'
 env | grep -i _proxy                      # inspect locally, redact credentials (Q11)
 ```
@@ -51,7 +52,7 @@ Select the service path before continuing:
 - **macOS:** use the shipped launchd plist, not systemd. A LaunchAgent requires a logged-in GUI user session.
 - **Windows with WSL2:** prepare systemd using [the Windows recipe](docs/setup.md#windows-wsl2-with-systemd) first. Herdr, Node, the bridge and the tunnel must run inside the same distribution. Ask before `wsl --shutdown`, which stops all WSL distributions.
 
-**verify:** Node >= 22, Herdr >= 0.9, Git available for cloning, the selected service route works, and the tunnel prerequisites are met. **STOP and ask the human** for missing software you cannot install, provider logins, or any fix needing administrator access. Report the failing check without credentials.
+**verify:** current Node at least 26.12.1, current Herdr at least 0.9.5, Pi and Git available, the selected service route works, and the tunnel prerequisites are met. The MCP client must support protocol 2026-07-28. **STOP and ask the human** for missing software you cannot install, provider logins, or any fix needing administrator access. Report the failing check without credentials.
 
 ## 1. Install
 ```sh
@@ -69,23 +70,24 @@ cd "$REPO" && npm run token
 
 ## 3. Keep it running
 
+Run `npm run check:live` before starting or restarting the bridge, with the same Herdr binary and PATH that the service uses. It checks every friendly verb against installed Herdr and Pi in a disposable session, with no model calls or changes to user panes. Stop if it fails. Subsequent restarts of the Linux service should use `npm run restart`, which runs the gate under systemd's effective environment and launcher. On macOS or another supervisor, run the gate with that supervisor's configured environment before stopping the process.
+
 Use the matching [service recipe](docs/setup.md#keep-the-bridge-running):
 - **Linux:** `systemd/herdr-mcp.service`, settings in `~/.config/herdr-mcp/service.env`, lingering enabled.
 - **macOS:** `launchd/dev.herdr-mcp.plist`, settings in its `EnvironmentVariables`. Replace all placeholder paths and set the real Node executable. launchd does not read `service.env`.
 - **Windows:** WSL2 plus the Linux systemd unit. Set up WSL lifetime separately if unattended access is needed. Lingering alone does not launch or keep WSL alive.
 
-Set absolute paths in all service settings. Neither manager loads shell rc files or expands `~` and `$HOME`. Put Herdr 0.9+ first on the service PATH. Preserve custom `PORT`, token and socket settings from the previous steps. Never overwrite an existing unit or plist without inspecting it.
+Set absolute paths in all service settings. Neither manager loads shell rc files or expands `~` and `$HOME`. Put current Herdr first on the service PATH. Preserve custom `PORT`, token and socket settings from the previous steps. Never overwrite an existing unit or plist without inspecting it.
 
 **Verify the manager:** Linux or WSL: `systemctl --user is-active herdr-mcp`. macOS: `plutil -lint ~/Library/LaunchAgents/dev.herdr-mcp.plist`, then `launchctl print "gui/$(id -u)/dev.herdr-mcp"` must show `state = running`.
 
 **Verify the bridge:** run `npm run doctor` with the same binary, PATH, token and socket settings as the service. For Linux's `service.env`, use `(set -a; . ~/.config/herdr-mcp/service.env; cd "$REPO"; node bin/herdr-mcp.mjs doctor)`. Then:
 ```sh
-T=$(cat "$TOKEN_FILE")   # kept in a variable for steps 3 and 6; don't echo it
 curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:$PORT/mcp            # 401
-curl -s http://127.0.0.1:$PORT/mcp -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
-  -H 'Accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'                                   # herdr_skill, herdr
+HERDR_MCP_URL="http://127.0.0.1:$PORT/mcp" npm run check:connection
 ```
+
+The connection check reads the existing token privately and verifies MCP 2026-07-28, both tools and pane discovery without printing pane contents.
 
 ## 4. Expose through the chosen route
 Run only the route chosen above. For Cloudflare, skip the Tailscale commands and follow [the Cloudflare recipe](docs/setup.md#cloudflare-tunnel). That recipe sets `URL` too.
@@ -110,15 +112,14 @@ Verify public routes from outside the tailnet, or private Serve from the actual 
 ## 5. Connect clients (HUMAN pastes the token)
 Render the selected [connector template](docs/clients.md) with the actual verified URL, not `$URL` or an example hostname. Give the user the exact token file path separately. Leave only the secret for **HUMAN** to paste directly into the client's protected field or environment. Do not put it into chat or tracked configuration. Explain that the bridge uses Streamable HTTP with bearer headers, not OAuth or legacy SSE.
 
-**verify:** the client discovers `herdr_skill` and `herdr`. If it cannot send a custom Authorization header, stop and report the incompatibility. Do not remove authentication to make it work.
+**verify:** the client negotiates MCP 2026-07-28 and discovers `herdr_skill` and `herdr`. If it cannot use that protocol or send a custom Authorization header, stop and report the incompatibility. Do not add an old-protocol fallback or remove authentication to make it work.
 
 ## 6. End-to-end test
-Use `$URL` from step 4 (or `URL=http://127.0.0.1:$PORT/mcp` for a local-only/trial run). `T` is from step 3.
+Use `$URL` from step 4 (or `URL=http://127.0.0.1:$PORT/mcp` for a local-only/trial run).
 ```sh
-curl -s "$URL" -H "Authorization: Bearer $T" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"herdr","arguments":{"args":["pane","list"]}}}'
+HERDR_MCP_URL="$URL" npm run check:connection
 ```
-**verify:** the result has `"exit_code":0` and lists panes. Then, from the connected client: call `herdr_skill`, then `herdr {"args":["list"]}`.
+**verify:** the check reports successful authentication, both tools and pane discovery. Then, from the connected client: call `herdr_skill`, then `herdr {"args":["list"]}`.
 
 Report the URL, the status of each step, and any HUMAN steps still pending.
 Do not claim completion until the selected client has called both tools successfully. If a human-only check is pending, hand over its exact action and mark setup pending.
@@ -128,7 +129,7 @@ Do not claim completion until the selected client has called both tools successf
 |---|---|---|---|
 | Q1 | Snippets fail (`set -a`, `$(...)`, `while read`) under zsh/fish | `echo $SHELL` | Run everything in `bash` (or `bash -l` to pick up PATH). Fish syntax differs entirely. |
 | Q2 | Service: `node: not found` or wrong version; works in your terminal | `command -v node`; inspect the unit or plist environment | Resolve the real binary (`mise which node`, `nvm which current`, `asdf which nodejs`). Use its absolute path in systemd `ExecStart` or launchd `ProgramArguments`. Re-check after upgrades. |
-| Q3 | `doctor` reports Herdr 0.8.x | `type -a herdr` and `--version` each candidate | Put the 0.9+ directory first in the service PATH or set `HERDR_MCP_BINARY` to its absolute path. Ask before removing a stale binary. |
+| Q3 | `doctor` reports an outdated Herdr | `type -a herdr` and `--version` each candidate | Put current Herdr first in the service PATH or set `HERDR_MCP_BINARY` to its absolute path. Ask before removing a stale binary. |
 | Q4 | `systemctl --user` errors | On Linux or WSL: `ps -p 1 -o comm=` | Enable WSL systemd using docs/setup.md. On macOS use launchd instead. In a container, arrange supervision outside this runbook. |
 | Q5 | Service dies at logout or after reboot | Linux: `loginctl show-user "$USER" -p Linger`. macOS: check login session. Windows: check WSL lifetime. | Linux: enable lingering (ask if sudo is needed). macOS: the shipped LaunchAgent runs only while logged in. WSL: follow the Task Scheduler guidance in docs/setup.md. |
 | Q6 | `tailscale` says logged out / `NeedsLogin` | `tailscale status` | `tailscale up`, then **give the login URL to the human** and wait. |

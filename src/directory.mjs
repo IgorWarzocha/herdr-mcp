@@ -2,7 +2,8 @@ import { commandResult, exceptionResult, failure } from './errors.mjs';
 
 export const PANES_URI = 'herdr://panes';
 
-// UI labels are context for choosing a pane ID, not aliases for sending input.
+// Preserve every identity. The friendly command boundary resolves labels only
+// when they identify one pane; discovery never collapses duplicate labels.
 export function projectDirectory(snapshot) {
   if (!snapshot || !['panes', 'tabs', 'workspaces', 'agents'].every(key => Array.isArray(snapshot[key]))) {
     throw new Error('Invalid Herdr snapshot');

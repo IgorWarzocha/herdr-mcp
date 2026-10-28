@@ -5,9 +5,9 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { createRunner } from '../src/bridge.mjs';
-import { createHandler } from '../src/server.mjs';
+import { createHandler } from '../src/http.mjs';
 
-async function checkWait(mode) {
+async function checkWait() {
   const childRunner = createRunner({binary: process.execPath, home: tmpdir(), path: process.env.PATH});
   let commands = 0, streamText = '';
   const runner = { run(args, signal, options) {
@@ -19,7 +19,7 @@ async function checkWait(mode) {
   const http = createServer(handler);
   http.requestTimeout = 15000;
   http.headersTimeout = 10000;
-  const client = new Client({name: 'long-wait-smoke', version: '1'}, {versionNegotiation: {mode}});
+  const client = new Client({name: 'long-wait-smoke', version: '1'}, {versionNegotiation: {mode: {pin: '2026-07-28'}}});
   try {
     http.listen(0, '127.0.0.1');
     await once(http, 'listening');
@@ -38,7 +38,7 @@ async function checkWait(mode) {
       },
     });
     await client.connect(transport);
-    const response = await client.callTool({name: 'herdr', arguments: {args: ['wait', 'smoke-agent']}}, {timeout: 75000});
+    const response = await client.callTool({name: 'herdr', arguments: {args: ['agent', 'wait', 'smoke-agent']}}, {timeout: 75000});
     const result = JSON.parse(response.content[0].text);
     assert.equal(response.isError, false);
     assert.equal(result.code, 'ok');
@@ -57,4 +57,4 @@ async function checkWait(mode) {
   }
 }
 
-await Promise.all([checkWait('legacy'), checkWait({pin: '2026-07-28'})]);
+await checkWait();

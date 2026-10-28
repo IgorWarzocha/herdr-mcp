@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { readDirectory } from './directory.mjs';
+import { FRIENDLY_VERBS, prepareFriendly } from './friendly.mjs';
 import { BridgeError, commandResult, exceptionResult, failure } from './errors.mjs';
 
 // Quote-only shell words: no substitution, expansion, operators, or shell process.
@@ -48,12 +49,10 @@ export function normalize(input) {
   if (verb === 'list') {
     if (args.length !== 1) throw new Error('Use list, or raw pane list / agent list');
     return ['list'];
-  } else if (['send', 'read', 'wait'].includes(verb)) {
-    if (!target || target.startsWith('-')) throw new Error(`${verb} requires an explicit pane ID or agent name`);
-    if (verb === 'send' && rest.length !== 1) throw new Error('Use send <target> "message"');
-    args = verb === 'send' ? ['agent', 'prompt', target, '--', ...rest] :
-      verb === 'read' ? [/^w[^:]+:p[^:]+$/.test(target) ? 'pane' : 'agent', 'read', target, ...rest] :
-        ['agent', 'wait', target, ...rest];
+  } else if (FRIENDLY_VERBS.includes(verb)) {
+    if (!target || target === '--current') throw new Error(`${verb} requires an explicit target`);
+    if (verb === 'send' && !rest.length) throw new Error('Use send <target> "message"');
+    return verb === 'send' ? [verb, target, rest.join(' ')] : args;
   }
   // Herdr extracts --session globally, even after the subcommand, until --.
   for (const arg of args) {
@@ -164,6 +163,12 @@ export async function executeCommand(runner, args, signal, waitMaxMs = DEFAULT_W
   }
   let wait, result;
   try {
+    const prepared = await prepareFriendly(runner, args, signal, waitMaxMs);
+    if (prepared.result) return { ...prepared.result, elapsed_ms: Math.round(performance.now() - started) };
+    if (prepared.args !== args) {
+      try { args = normalize({ args: prepared.args }); }
+      catch (error) { throw new BridgeError('invalid_arguments', error.message); }
+    }
     wait = prepareWait(args, waitMaxMs);
     // Let the CLI return its own timeout before the watchdog kills the process.
     result = commandResult(await runner.run(wait?.args ?? args, signal, wait ? { timeoutMs: wait.timeout_ms + 2000 } : {}));

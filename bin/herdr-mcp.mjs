@@ -6,7 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdir, writeFile, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { config, main, readToken } from '../src/server.mjs';
+import { checkHerdrVersion, config, main, readToken } from '../src/server.mjs';
 import { commandEnvironment } from '../src/bridge.mjs';
 
 const cmd = process.argv[2];
@@ -24,9 +24,7 @@ if (cmd === 'token') {
   const execOptions = { env: commandEnvironment(cfg), cwd: cfg.home, shell: false, windowsHide: true, timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] };
   await check('herdr', () => {
     const v = execFileSync(cfg.binary, ['--version'], execOptions).toString().trim();
-    const [maj, min] = (v.match(/(\d+)\.(\d+)/) ?? []).slice(1).map(Number);
-    if (!(maj > 0 || min >= 9)) throw new Error(`${v} found first on PATH; need 0.9+ (check HERDR_MCP_BINARY and PATH)`);
-    return v;
+    return checkHerdrVersion(v);
   });
   await check('socket', () => {
     // Let Herdr probe its own transport: a Unix socket on POSIX, a named pipe on Windows.

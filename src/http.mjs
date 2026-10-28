@@ -10,8 +10,8 @@ import { createPaneUpdates } from './pane-updates.mjs';
 export function createHandler({ token, runner, origins, waitMaxMs = DEFAULT_WAIT_MAX_MS, pollIntervalMs = 2000 }) {
   const expected = Buffer.from(`Bearer ${token}`);
   const updates = createPaneUpdates({ runner, intervalMs: pollIntervalMs });
-  const mcp = createMcpHandler(({ era }) => createMcpServer({ runner, updates, waitMaxMs, era }), {
-    legacy: 'stateless', responseMode: 'sse', keepAliveMs: 15000,
+  const mcp = createMcpHandler(() => createMcpServer({ runner, updates, waitMaxMs }), {
+    legacy: 'reject', responseMode: 'sse', keepAliveMs: 15000,
     maxRequestBodySize: 131072, maxSubscriptions: 8, bus: updates.bus,
   });
   const serve = toNodeHandler(mcp, { maxRequestBodySize: 131072 });

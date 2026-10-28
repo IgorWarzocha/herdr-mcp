@@ -6,7 +6,14 @@ import { pathToFileURL } from 'node:url';
 import { createRunner, DEFAULT_WAIT_MAX_MS } from './bridge.mjs';
 import { createHandler } from './http.mjs';
 
-export { createHandler } from './http.mjs';
+export function checkHerdrVersion(text) {
+  const match = /^herdr (\d+)\.(\d+)\.(\d+)(?:\s|$)/.exec(text.trim());
+  if (!match || (Number(match[1]) === 0 && (Number(match[2]) < 9 ||
+      (Number(match[2]) === 9 && Number(match[3]) < 5)))) {
+    throw new Error('Current Herdr is required (0.9.5 or newer). Check HERDR_MCP_BINARY and PATH.');
+  }
+  return text.trim();
+}
 
 export function config(env = process.env, platform = process.platform) {
   const win = platform === 'win32';
@@ -48,6 +55,9 @@ export async function main() {
   if (!isAbsolute(socket)) throw new Error('HERDR_MCP_SOCKET must be an absolute path');
   const token = await readToken(tokenFile);
   const runner = createRunner({ binary, socket, home, path });
+  const version = await runner.run(['--version']);
+  if (version.exit_code !== 0 || version.timed_out || version.truncated) throw new Error('Could not verify the installed Herdr version.');
+  checkHerdrVersion(version.stdout);
   const handler = createHandler({ token, runner, origins, waitMaxMs });
   const http = createServer(handler);
   http.requestTimeout = 15000;

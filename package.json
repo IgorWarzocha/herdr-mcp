@@ -1,6 +1,6 @@
 {
   "name": "herdr-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Thin MCP pass-through to the Herdr CLI: two tools (herdr_skill, herdr) so remote agents can list, read and message your Herdr panes.",
   "license": "MIT",
   "author": "Igor Warzocha",
@@ -35,7 +35,7 @@
     ".env.example"
   ],
   "engines": {
-    "node": ">=22"
+    "node": ">=26.12.1"
   },
   "scripts": {
     "start": "node bin/herdr-mcp.mjs",
@@ -43,7 +43,10 @@
     "doctor": "node bin/herdr-mcp.mjs doctor",
     "test": "node --test",
     "check:long-wait": "node scripts/check-long-wait.mjs",
-    "check": "node --check src/server.mjs && node --check src/bridge.mjs && node --check bin/herdr-mcp.mjs && node --test"
+    "check": "node --check src/server.mjs && node --check src/bridge.mjs && node --check bin/herdr-mcp.mjs && node --test",
+    "check:live": "node scripts/check-live.mjs",
+    "check:connection": "node scripts/check-connection.mjs",
+    "restart": "node scripts/restart.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.4.0",

@@ -11,20 +11,20 @@ const schemas = {
 const inputSchemas = Object.fromEntries(Object.entries(schemas).map(([name, schema]) =>
   [name, z.toJSONSchema(schema, { io: 'input', target: 'draft-2020-12' })]));
 
-export function createMcpServer({ runner, updates, waitMaxMs, era }) {
-  const server = new Server({ name: 'herdr-mcp', version: '0.1.0' }, {
-    capabilities: { tools: { listChanged: false }, resources: { listChanged: false, subscribe: era === 'modern' } },
+export function createMcpServer({ runner, updates, waitMaxMs }) {
+  const server = new Server({ name: 'herdr-mcp', version: '0.2.0' }, {
+    capabilities: { tools: { listChanged: false }, resources: { listChanged: false, subscribe: true } },
   });
   server.setRequestHandler('tools/list', () => ({ tools: [
     { name: 'herdr_skill', description: 'Read the installed Herdr CLI guide verbatim', inputSchema: inputSchemas.herdr_skill },
     {
       name: 'herdr', inputSchema: inputSchemas.herdr,
-      description: `Run Herdr on the pinned server. Machine discovery, machine routing, session switching and maintenance are disabled. Start with list: it pairs pane IDs with workspace_label, tab_label, agent name and terminal title. A tab label or workspace label is not an agent name; match the intended pane and use its pane_id, never guess between duplicate labels. Use args or a quote-only command. Friendly verbs: list, read, send, wait. Read herdr_skill for CLI syntax. Push-capable clients can subscribe to herdr://panes with subscriptions/listen and re-read it on notifications/resources/updated. Otherwise use wait. Calls block: the configured wait ceiling is ${waitMaxMs} ms, plus up to 4 seconds for cleanup and a state check. If a gateway times out first, use a shorter --timeout; 25000 means 25 seconds. Coding agents take minutes, not seconds. On wait_timeout, read with --source visible if looking for a reply, even while working; then repeat the wait with the same target, condition and timeout if needed. Use agent get for reported status, not a list drawn inside a pane. State is not per-turn completion. send acknowledges delivery, not that a turn started or finished; do not resend merely because status has not changed. Visible reads show the current screen, not a full transcript.`,
+      description: `Control the pinned Herdr server. list; send <target> <text>; read <target>; reply <target> for clean Pi text; wait <target> [--timeout ms]. Targets accept pane IDs, agent names and unique labels. Calls block; wait ceiling ${waitMaxMs} ms. Sending confirms delivery, not completion. Read herdr_skill for full CLI syntax.`,
     },
   ] }));
 
   // Low-level SDK registration keeps the bridge's short validation envelope.
-  // SDK v2 still owns era decoding, resultType encoding and cancellation.
+  // SDK v2 owns protocol encoding and cancellation.
   server.setRequestHandler('tools/call', async (request, ctx) => {
     const name = request.params.name;
     if (!Object.hasOwn(schemas, name)) return toolResult(failure('invalid_arguments', 'Use herdr or herdr_skill.'));

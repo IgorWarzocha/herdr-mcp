@@ -2,13 +2,13 @@
 
 Let an AI agent read and send messages to [Herdr](https://github.com/herdrdev/herdr) terminal panes on your own machine.
 
-herdr-mcp connects Grok Bot, Cursor cloud agents, Cursor desktop and other MCP clients to a running Herdr session. Ask your agent to list your agents, check their output, send a task or wait for a status change. You can follow work from a remote client without sitting at the terminal.
+herdr-mcp connects MCP clients to a running Herdr session. Ask your agent to list your panes, check their output, send a task or wait for a status change. You can follow work from a remote client without sitting at the terminal. The client must support MCP 2026-07-28. Check that requirement before using a hosted connector such as Grok Bot or Cursor.
 
 It is for people who already use Herdr and want to give an agent remote access. Your Herdr machine must stay awake and connected.
 
-`list` shows every pane with its workspace label, tab label, agent name and terminal title. Your agent can match the name you see in Herdr, then address the pane by its ID.
+`list` shows every pane with its workspace label, tab label, agent name and terminal title. Friendly commands accept pane IDs, agent names and unique labels. `send` submits a prompt to an agent or runs a command in an available shell pane. `read` returns unwrapped terminal text by default. `reply` reads Pi's latest completed reply from its reported session file, without terminal borders or screen-width wrapping.
 
-Clients using MCP 2026-07-28 can subscribe to pane-directory changes instead of repeatedly calling a tool to check status. The bridge uses the official SDK v2 and includes a [receiving client](docs/push.md). Older clients keep the two tools and blocking waits. Receiving an update does not by itself start a model turn in Grok Bot or Cursor.
+Clients using MCP 2026-07-28 can subscribe to pane-directory changes instead of repeatedly calling a tool to check status. The bridge uses the official SDK v2 and includes a [receiving client](docs/push.md). Receiving an update does not by itself start a model turn in Grok Bot or Cursor. Older MCP protocols are rejected.
 
 ## SSH vs MCP
 
@@ -20,10 +20,11 @@ The wait limit is configurable for local clients or others that tolerate longer 
 
 ## What you need
 
-- **Herdr 0.9 or later**, with its server running.
-- **Node.js 22 or later** on the same machine.
+- **Current stable Herdr**, with its server running. This version targets 0.9.5 or newer.
+- **Current Node.js**, at least 26.12.1, on the same machine.
+- **Pi on PATH** for the deployment smoke test. It uses a disposable saved conversation and makes no model calls.
 - **Linux, macOS or Windows.** Background setup uses systemd on Linux, launchd on macOS, or WSL2 with systemd on Windows. Native Windows can run the bridge in the foreground.
-- **An MCP client that supports Streamable HTTP and a custom bearer-token header.** A client that requires OAuth without custom headers is not supported.
+- **An MCP client that supports protocol 2026-07-28 over Streamable HTTP and a custom bearer-token header.** Older protocols and OAuth-only clients are not supported.
 - **A connection route:**
   - **Tailscale Funnel:** a public HTTPS address without buying a domain. Requires a Tailscale account and permission to enable HTTPS and Funnel.
   - **Cloudflare Tunnel:** a public HTTPS address on a domain you manage through Cloudflare.

@@ -6,7 +6,7 @@ const uri = 'herdr://panes';
 // A receiving client, not a model scheduler. Fail visibly on disconnect so a
 // caller can choose its reconnect policy and start with a fresh resource read.
 export async function watchPanes({ url, token, signal, onDirectory }) {
-  const client = new Client({ name: 'herdr-pane-watcher', version: '0.1.0' }, {
+  const client = new Client({ name: 'herdr-pane-watcher', version: '0.2.0' }, {
     versionNegotiation: { mode: { pin: '2026-07-28' } },
   });
   let subscription, wake, ended, dirty = true;
