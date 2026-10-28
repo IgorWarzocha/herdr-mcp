@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { readDirectory } from './directory.mjs';
 import { BridgeError, commandResult, exceptionResult, failure } from './errors.mjs';
 
 // Quote-only shell words: no substitution, expansion, operators, or shell process.
@@ -46,7 +47,7 @@ export function normalize(input) {
   const [verb, target, ...rest] = args;
   if (verb === 'list') {
     if (args.length !== 1) throw new Error('Use list, or raw pane list / agent list');
-    args = ['agent', 'list'];
+    return ['list'];
   } else if (['send', 'read', 'wait'].includes(verb)) {
     if (!target || target.startsWith('-')) throw new Error(`${verb} requires an explicit pane ID or agent name`);
     if (verb === 'send' && rest.length !== 1) throw new Error('Use send <target> "message"');
@@ -158,6 +159,9 @@ export function prepareWait(args, waitMaxMs = DEFAULT_WAIT_MAX_MS) {
 
 export async function executeCommand(runner, args, signal, waitMaxMs = DEFAULT_WAIT_MAX_MS) {
   const started = performance.now();
+  if (args.length === 1 && args[0] === 'list') {
+    return { ...await readDirectory(runner, signal), elapsed_ms: Math.round(performance.now() - started) };
+  }
   let wait, result;
   try {
     wait = prepareWait(args, waitMaxMs);

@@ -62,11 +62,13 @@ For a client that wants a bearer-token field rather than a header, enter only th
 
 ## Verify discovery and long waits
 
+The bridge supports the official MCP 2026-07-28 subscription protocol and legacy Streamable HTTP clients. Push requires client support beyond tool discovery. See [push clients](push.md) for the included receiver and reconnect contract. Grok Bot and Cursor notification delivery into model turns has not been verified.
+
 Ask the connected agent to call `herdr_skill`, then `herdr` with `{"args":["pane","list"]}`. Both must succeed before calling setup complete.
 
 Each wait allows 90 seconds by default; tool discovery reports the configured ceiling for this bridge. On `wait_timeout`, read with `--source visible` if looking for a reply, even when state is still working. If the result is still needed, call `wait` again with the same target, condition and timeout until it is ready or the user's overall deadline is reached. Do not resend the task.
 
-`HERDR_MCP_WAIT_MAX` sets the bridge ceiling in milliseconds, default `90000`. Configure the client's **tool request timeout** above that budget, allowing for cleanup and the final state check. For example, pass `{ timeout: 100000 }` as the third argument to the TypeScript MCP SDK's `client.callTool`. Its default is only 60000 ms. For a local or long-tolerant client, `HERDR_MCP_WAIT_MAX=600000` still permits ten-minute waits, provided the client timeout is longer, such as 620000 ms.
+`HERDR_MCP_WAIT_MAX` sets the bridge ceiling in milliseconds, default `90000`. Configure the client's **tool request timeout** above that budget, allowing for cleanup and the final state check. With SDK v2, pass `{ timeout: 100000 }` as the second argument to `client.callTool(params, options)`. Its default is only 60000 ms. For a local or long-tolerant client, `HERDR_MCP_WAIT_MAX=600000` still permits ten-minute waits, provided the client timeout is longer, such as 620000 ms.
 
 Tool responses stream over HTTP with protocol-level keepalive comments every 15 seconds. These carry no model-visible messages and do not cost repeated tool calls. They protect against idle proxy timeouts, but cannot extend a client's hard deadline. This is streaming within Streamable HTTP, not the legacy SSE connector type.
 

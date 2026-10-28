@@ -2,7 +2,7 @@
 const advice = {
   herdr_not_running: ['Herdr cannot be reached.', 'Ask the user to start Herdr or check the pinned HERDR_MCP_SOCKET in the bridge environment.'],
   session_missing: ['The selected session is missing.', 'Ask the user to restore the intended session or correct the bridge socket. Session switching is disabled here.'],
-  pane_not_found: ['The pane or agent was not found.', 'Run list or pane list, then use an explicit current ID. Ask the user if the intended target is absent.'],
+  pane_not_found: ['The pane or agent was not found.', 'Run list, match workspace_label, tab_label, name and terminal_title, then use the pane_id. Display labels are not agent names. Ask the user if the target is absent or ambiguous.'],
   agent_not_idle: ['Herdr cannot capture the requested agent history while the agent is working.', 'Read the same target with --source visible for the current screen, or wait until idle and retry the history read. Visible output is not the full transcript.'],
   bad_token: ['Bearer token missing or rejected.', 'Ask the user to copy the existing token into the client Authorization: Bearer header. Do not rotate it or paste it into chat.'],
   timeout: ['The command timed out.', 'Read the target before retrying input. A timeout does not undo input.'],

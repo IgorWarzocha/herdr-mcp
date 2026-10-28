@@ -4,13 +4,39 @@
   "description": "Thin MCP pass-through to the Herdr CLI: two tools (herdr_skill, herdr) so remote agents can list, read and message your Herdr panes.",
   "license": "MIT",
   "author": "Igor Warzocha",
-  "repository": { "type": "git", "url": "git+https://github.com/IgorWarzocha/herdr-mcp.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/IgorWarzocha/herdr-mcp.git"
+  },
   "homepage": "https://github.com/IgorWarzocha/herdr-mcp#readme",
-  "keywords": ["mcp", "herdr", "terminal", "agents", "cursor", "grok"],
+  "keywords": [
+    "mcp",
+    "herdr",
+    "terminal",
+    "agents",
+    "cursor",
+    "grok"
+  ],
   "type": "module",
-  "bin": { "herdr-mcp": "bin/herdr-mcp.mjs" },
-  "files": ["bin", "src", "systemd", "launchd", "docs", "scripts", "README.md", "SETUP.md", "SKILL.md", "LICENSE", ".env.example"],
-  "engines": { "node": ">=22" },
+  "bin": {
+    "herdr-mcp": "bin/herdr-mcp.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "systemd",
+    "launchd",
+    "docs",
+    "scripts",
+    "README.md",
+    "SETUP.md",
+    "SKILL.md",
+    "LICENSE",
+    ".env.example"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "node bin/herdr-mcp.mjs",
     "token": "node bin/herdr-mcp.mjs token",
@@ -19,5 +45,10 @@
     "check:long-wait": "node scripts/check-long-wait.mjs",
     "check": "node --check src/server.mjs && node --check src/bridge.mjs && node --check bin/herdr-mcp.mjs && node --test"
   },
-  "dependencies": { "@modelcontextprotocol/sdk": "1.32.1", "zod": "4.6.7" }
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
+    "@modelcontextprotocol/node": "2.1.2",
+    "@modelcontextprotocol/server": "2.4.0",
+    "zod": "4.6.7"
+  }
 }

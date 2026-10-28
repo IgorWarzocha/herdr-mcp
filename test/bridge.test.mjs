@@ -5,8 +5,7 @@ import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { commandEnvironment, createRunner, normalize, splitCommand } from '../src/bridge.mjs';
 import { config, createHandler, readToken } from '../src/server.mjs';
 
@@ -107,7 +106,7 @@ test('timeout, cancellation and concurrency release the process slot', async () 
   assert.equal((await run.run(['-e', ''])).exit_code, 0);
 });
 
-test('real MCP transport requires auth, validates origin, discovers and executes two tools', async t => {
+for (const mode of ['legacy', { pin: '2026-07-28' }]) test(`real MCP ${typeof mode === 'string' ? mode : mode.pin} transport preserves auth and both tools`, async t => {
   const calls = [];
   let next = {exit_code: 0, stdout: 'Installed guide\nKeep this exactly.\n', stderr: '', timed_out: false, truncated: false, cancelled: false};
   const http = createServer(createHandler({ token: 'test-token', origins: [], runner: {
@@ -123,9 +122,10 @@ test('real MCP transport requires auth, validates origin, discovers and executes
   }
   assert.equal(calls.length, 0);
   assert.equal((await fetch(url, {method: 'POST', headers: {Authorization: 'Bearer test-token', Origin: 'https://evil.example'}})).status, 403);
-  const client = new Client({name: 'test', version: '1'});
+  const client = new Client({name: 'test', version: '1'}, {versionNegotiation: {mode}});
   t.after(() => client.close());
   await client.connect(new StreamableHTTPClientTransport(url, {requestInit: {headers: {Authorization: 'Bearer test-token'}}}));
+  assert.equal(client.getNegotiatedProtocolVersion(), typeof mode === 'string' ? '2025-11-25' : mode.pin);
   const tools = (await client.listTools()).tools;
   assert.deepEqual(tools.map(tool => tool.name), ['herdr_skill', 'herdr']);
   assert.match(tools[1].description, /configured wait ceiling is 90000 ms/);

@@ -1,104 +1,12 @@
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
-import { timingSafeEqual } from 'node:crypto';
 import { homedir } from 'node:os';
 import { isAbsolute, posix, win32 } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { z } from 'zod';
-import { createRunner, DEFAULT_WAIT_MAX_MS, executeCommand, normalize } from './bridge.mjs';
-import { failure, toolResult } from './errors.mjs';
+import { createRunner, DEFAULT_WAIT_MAX_MS } from './bridge.mjs';
+import { createHandler } from './http.mjs';
 
-const toolSchemas = {
-  herdr: z.object({ args: z.array(z.string()).max(256).optional(), command: z.string().max(65536).optional() }),
-  herdr_skill: z.object({}),
-};
-
-export function createHandler({ token, runner, origins, waitMaxMs = DEFAULT_WAIT_MAX_MS }) {
-  const expected = Buffer.from(`Bearer ${token}`);
-  let requests = 0;
-  return async (req, res) => {
-    res.setHeader('Cache-Control', 'no-store');
-    const auth = Buffer.from(req.headers.authorization ?? '');
-    if (auth.length !== expected.length || !timingSafeEqual(auth, expected)) {
-      res.writeHead(401, { 'WWW-Authenticate': 'Bearer', 'Content-Type': 'application/json' }).end(JSON.stringify(failure('bad_token'))); return;
-    }
-    if (req.headers.origin && !origins.includes(req.headers.origin)) {
-      res.writeHead(403).end('Origin not allowed'); return;
-    }
-    if (req.url !== '/mcp') { res.writeHead(404).end(); return; }
-    if (req.method !== 'POST') { res.writeHead(405, { Allow: 'POST' }).end(); return; }
-    if (requests >= 16) { res.writeHead(503, { 'Content-Type': 'application/json' }).end(JSON.stringify(failure('busy'))); return; }
-    if (!req.headers['content-type']?.toLowerCase().startsWith('application/json')) {
-      res.writeHead(415).end('Expected application/json'); return;
-    }
-    requests++;
-    const abort = new AbortController();
-    const bodyTimer = setTimeout(() => req.destroy(), 10000);
-    let server, transport;
-    res.once('close', () => {
-      abort.abort();
-      void server?.close().catch(() => {});
-    });
-    try {
-      const buffers = []; let size = 0;
-      for await (const chunk of req) {
-        size += chunk.length;
-        if (size > 131072) { res.writeHead(413).end('Request exceeds 128 KiB'); return; }
-        buffers.push(chunk);
-      }
-      clearTimeout(bodyTimer);
-      let body;
-      try { body = JSON.parse(Buffer.concat(buffers).toString('utf8')); }
-      catch { res.writeHead(400).end('Invalid JSON'); return; }
-      // Use the advertised schemas before SDK validation so malformed tool inputs
-      // get the same short recovery envelope rather than a verbose validator dump.
-      if (body?.method === 'tools/call' && ['string', 'number'].includes(typeof body.id) &&
-          Object.hasOwn(toolSchemas, body.params?.name) &&
-          !toolSchemas[body.params.name].safeParse(body.params.arguments ?? {}).success) {
-        res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({
-          jsonrpc: '2.0', id: body.id, result: toolResult(failure('invalid_arguments', body.params.name === 'herdr'
-            ? 'Use args as an array of at most 256 strings, or command as a string of at most 65536 characters.'
-            : 'Supply a JSON arguments object. herdr_skill needs no arguments.')),
-        }));
-        return;
-      }
-      server = new McpServer({ name: 'herdr-mcp', version: '0.1.0' });
-      const execute = (args, extra) => executeCommand(runner, args, AbortSignal.any([abort.signal, extra.signal]), waitMaxMs);
-      server.registerTool('herdr_skill', { description: 'Read the installed Herdr CLI guide verbatim', inputSchema: toolSchemas.herdr_skill }, async (_, extra) => {
-        const result = await execute(['--skill'], extra);
-        if (result.code === 'truncated') {
-          return toolResult({ ...result, next: 'The installed guide exceeded the output limit. Use herdr with the relevant subcommand --help instead.' });
-        }
-        if (result.code !== 'ok') return toolResult(result);
-        return { content: [{ type: 'text', text: result.stdout }] };
-      });
-      server.registerTool('herdr', {
-        description: `Run Herdr on the pinned server with explicit targets. Machine discovery, machine routing, session switching and maintenance are disabled; start with list or pane list, not machine list. Use args or a quote-only command. Friendly verbs: list, read, send, wait. Read herdr_skill for CLI syntax. Calls block: the configured wait ceiling is ${waitMaxMs} ms, plus up to 4 seconds for cleanup and a state check. If a gateway times out first, use a shorter --timeout; 25000 means 25 seconds. Coding agents take minutes, not seconds. If you need the result before continuing, call wait. On wait_timeout, read with --source visible if looking for a reply, even while working; then repeat the wait with the same target, condition and timeout if the result is still needed. Otherwise carry on and check back later. Use agent get for reported status, not a list drawn inside a pane. State is not per-turn completion. send acknowledges delivery, not that a turn started or finished; do not resend merely because status has not changed. Visible reads show the current screen, not a full transcript.`,
-        inputSchema: toolSchemas.herdr
-      }, async (input, extra) => {
-        let args;
-        try { args = normalize(input); }
-        catch (error) { return toolResult(failure('invalid_arguments', error.message)); }
-        return toolResult(await execute(args, extra));
-      });
-      // Stream tool responses so SDK-owned SSE comments keep idle proxies alive.
-      // Comments never enter model context and are not repeated tool calls.
-      transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined,
-        enableJsonResponse: body?.method !== 'tools/call', keepAliveMs: 15000 });
-      await server.connect(transport);
-      await transport.handleRequest(req, res, body);
-    } catch {
-      if (!res.headersSent && !res.destroyed) res.writeHead(500, { 'Content-Type': 'application/json' }).end(JSON.stringify(failure('bridge_error')));
-    } finally {
-      clearTimeout(bodyTimer);
-      // handleRequest may return before the tool response; close owns request capacity.
-      if (res.writableEnded || res.destroyed) { requests--; await server?.close(); }
-      else res.once('close', () => { requests--; });
-    }
-  };
-}
+export { createHandler } from './http.mjs';
 
 export function config(env = process.env, platform = process.platform) {
   const win = platform === 'win32';
@@ -140,13 +48,15 @@ export async function main() {
   if (!isAbsolute(socket)) throw new Error('HERDR_MCP_SOCKET must be an absolute path');
   const token = await readToken(tokenFile);
   const runner = createRunner({ binary, socket, home, path });
-  const http = createServer(createHandler({ token, runner, origins, waitMaxMs }));
+  const handler = createHandler({ token, runner, origins, waitMaxMs });
+  const http = createServer(handler);
   http.requestTimeout = 15000;
   http.headersTimeout = 10000;
   http.maxConnections = 64;
   http.listen(port, host, () => console.log(`herdr-mcp listening on http://${host}:${port}/mcp (bearer auth required)`));
   for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => {
-    runner.stop(); http.close(); http.closeAllConnections();
+    http.close();
+    void handler.close().finally(() => { runner.stop(); http.closeAllConnections(); });
   });
 }
 

@@ -20,7 +20,9 @@ Call `herdr_skill` once to read the installed CLI guide. Then use `herdr` with a
 {"args":["wait","w1:p1"]}
 ```
 
-Replace the example target with an ID from `list`. Use `pane list` for all terminals, not just agents. `send` acknowledges delivery, not that the turn started or finished. Do not resend merely because status has not changed. The bridge pins the session: machine discovery (`machine list`), machine routing and session switching are disabled. Do not use `--current` or `--session`.
+`list` includes all panes, including shells. Match the user's name against `workspace_label`, `tab_label`, `name` and `terminal_title`, then use the returned `pane_id`. A tab label is not an agent name. Duplicate labels remain separate panes: ask if the intended target is ambiguous. Raw `agent list`, `pane list`, `tab list` and `workspace list` retain the CLI's own output.
+
+`send` acknowledges delivery, not that the turn started or finished. Do not resend merely because status has not changed. The bridge pins the session: machine discovery (`machine list`), machine routing and session switching are disabled. Do not use `--current` or `--session`.
 
 Use `agent get <target>` for reported status. A list drawn inside a pane is just terminal content and may be stale or describe a different agent.
 
@@ -31,6 +33,8 @@ Use `read <pane-id> --source visible` for the current screen. It is not a transc
 On Herdr 0.9.4, `agent read <target> --lines 200` can return `agent_not_idle` while Pi is working: capturing its alternate-screen history requires scrolling while idle. Use `--source visible` to inspect the screen without that capture, or wait until idle and retry the original read. The bridge does not silently substitute screen output for requested history.
 
 ## Watching a pane
+
+If the client supports MCP 2026-07-28 subscriptions, subscribe to `herdr://panes` and re-read that resource on `notifications/resources/updated`. Read once after subscribing or reconnecting too. Updates cover names and reported state, not terminal transcripts or per-message completion. Only use push instead of waiting when the client actually delivers notifications to your workflow. See [push clients](docs/push.md). Otherwise use the wait loop below.
 
 The default wait ceiling is 90 seconds. A wait returns earlier when Herdr matches idle, done or blocked. The `herdr` tool description carries the blocking-call guidance. The separate `herdr_skill` tool returns the installed Herdr guide unchanged.
 

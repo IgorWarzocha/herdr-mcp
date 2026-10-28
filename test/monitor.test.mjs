@@ -6,8 +6,7 @@ import { tmpdir } from 'node:os';
 import { EventEmitter, once } from 'node:events';
 import { createServer, request } from 'node:http';
 import { createHandler } from '../src/server.mjs';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 
 const ok = { exit_code: 0, stdout: '', stderr: '', timed_out: false, truncated: false, cancelled: false };
 const expired = { ...ok, exit_code: 1, stderr: '{"id":"cli:wait","error":{"code":"timeout","message":"timed out waiting for agent status"}}' };
@@ -132,24 +131,28 @@ test('disconnecting an HTTP wait terminates its subprocess and releases capacity
   const url = new URL(`http://127.0.0.1:${http.address().port}/mcp`);
 
   // More than the handler's 16 request slots also catches HTTP capacity leaks.
-  for (let i = 0; i < 17; i++) {
+  for (const modern of [false, true]) for (let i = 0; i < 17; i++) {
     const deadline = AbortSignal.timeout(3000);
     const started = once(events, 'started', {signal: deadline});
     const finished = once(events, 'finished', {signal: deadline});
     const client = request(url, {method: 'POST', headers: {
       Authorization: 'Bearer disconnect-test', 'Content-Type': 'application/json',
       Accept: 'application/json, text/event-stream',
+      ...(modern ? { 'MCP-Protocol-Version': '2026-07-28', 'MCP-Method': 'tools/call', 'MCP-Name': 'herdr' } : {}),
     }});
     // Closing our own connection can produce ECONNRESET before response headers.
     client.on('error', () => {});
-    const response = once(client, 'response', {signal: deadline});
     client.end(JSON.stringify({jsonrpc: '2.0', id: i + 1, method: 'tools/call', params: {
       name: 'herdr', arguments: {args: ['wait', 'worker']},
+      ...(modern ? { _meta: {
+        'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+        'io.modelcontextprotocol/clientInfo': {name: 'disconnect-test', version: '1'},
+        'io.modelcontextprotocol/clientCapabilities': {},
+      } } : {}),
     }}));
     await started;
-    const [stream] = await response;
-    assert.match(stream.headers['content-type'], /^text\/event-stream/);
-    stream.resume();
+    // Cancel even before the first SSE frame. The v2 adapter does not flush
+    // headers until it has a frame; waiting for a keepalive would delay this test.
     client.destroy();
     const [result] = await finished;
     assert.equal(result.cancelled, true);

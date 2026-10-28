@@ -6,6 +6,10 @@ herdr-mcp connects Grok Bot, Cursor cloud agents, Cursor desktop and other MCP c
 
 It is for people who already use Herdr and want to give an agent remote access. Your Herdr machine must stay awake and connected.
 
+`list` shows every pane with its workspace label, tab label, agent name and terminal title. Your agent can match the name you see in Herdr, then address the pane by its ID.
+
+Clients using MCP 2026-07-28 can subscribe to pane-directory changes instead of repeatedly calling a tool to check status. The bridge uses the official SDK v2 and includes a [receiving client](docs/push.md). Older clients keep the two tools and blocking waits. Receiving an update does not by itself start a model turn in Grok Bot or Cursor.
+
 ## SSH vs MCP
 
 If you want to keep chatting with an agent while it works, SSH into the machine and use Herdr directly. If you want a remote agent to wait for a result before continuing its own task, use the MCP connection.
