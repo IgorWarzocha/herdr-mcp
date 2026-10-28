@@ -17,6 +17,7 @@ import { checkHerdrVersion, config } from '../src/server.mjs';
 import { commandEnvironment, createRunner } from '../src/bridge.mjs';
 import { createHandler } from '../src/http.mjs';
 import { FRIENDLY_VERBS } from '../src/friendly.mjs';
+import { checkProtocols } from './protocol-smoke.mjs';
 
 const exec = promisify(execFile);
 
@@ -73,6 +74,7 @@ export async function checkLive() {
     const token = randomBytes(32).toString('hex');
     handler = createHandler({ token, runner, origins: [] });
     http = createServer(handler); http.listen(0, '127.0.0.1'); await once(http, 'listening');
+    await checkProtocols(`http://127.0.0.1:${http.address().port}/mcp`, token);
     client = new Client({ name: 'installed-herdr-smoke', version: '0.2.0' }, { versionNegotiation: { mode: { pin: '2026-07-28' } } });
     await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${http.address().port}/mcp`), {
       requestInit: { headers: { Authorization: `Bearer ${token}` } },

@@ -31,4 +31,4 @@ Herdr's CLI does not provide the subscription stream used here. The bridge sampl
 
 Changes include pane membership, labels, terminal titles and reported agent state. They do not include terminal output. Read the pane when you need its screen or history. Reported idle or done still does not prove that a particular message finished.
 
-Up to eight subscription streams share the existing authenticated endpoint. Older protocols are rejected. Neither this protocol nor the bridge guarantees that a hosted client starts a new model turn when notified. Grok Bot and Cursor support must be verified separately. Keep using blocking waits where the client cannot deliver push updates into the workflow.
+Up to eight subscription streams share the existing authenticated endpoint. Clients using 2025-03-26 or 2025-06-18 retain tools, resource reads and blocking waits but are not offered subscriptions. Neither this protocol nor the bridge guarantees that a hosted client starts a new model turn when notified. Grok Bot and Cursor support must be verified separately. Keep using blocking waits where the client cannot deliver push updates into the workflow.

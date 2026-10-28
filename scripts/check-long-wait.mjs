@@ -7,7 +7,7 @@ import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/cli
 import { createRunner } from '../src/bridge.mjs';
 import { createHandler } from '../src/http.mjs';
 
-async function checkWait() {
+async function checkWait(version) {
   const childRunner = createRunner({binary: process.execPath, home: tmpdir(), path: process.env.PATH});
   let commands = 0, streamText = '';
   const runner = { run(args, signal, options) {
@@ -19,7 +19,10 @@ async function checkWait() {
   const http = createServer(handler);
   http.requestTimeout = 15000;
   http.headersTimeout = 10000;
-  const client = new Client({name: 'long-wait-smoke', version: '1'}, {versionNegotiation: {mode: {pin: '2026-07-28'}}});
+  const client = new Client({name: 'long-wait-smoke', version: '1'}, {
+    supportedProtocolVersions: [version],
+    versionNegotiation: {mode: version === '2026-07-28' ? {pin: version} : 'legacy'},
+  });
   try {
     http.listen(0, '127.0.0.1');
     await once(http, 'listening');
@@ -38,6 +41,7 @@ async function checkWait() {
       },
     });
     await client.connect(transport);
+    assert.equal(client.getNegotiatedProtocolVersion(), version);
     const response = await client.callTool({name: 'herdr', arguments: {args: ['agent', 'wait', 'smoke-agent']}}, {timeout: 75000});
     const result = JSON.parse(response.content[0].text);
     assert.equal(response.isError, false);
@@ -57,4 +61,4 @@ async function checkWait() {
   }
 }
 
-await checkWait();
+await Promise.all(['2025-03-26', '2025-06-18', '2026-07-28'].map(checkWait));

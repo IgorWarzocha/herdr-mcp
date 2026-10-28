@@ -2,7 +2,7 @@
 
 Use the URL verified during setup. These examples use `https://herdr-mcp.example.com/mcp`. A Tailscale route instead ends in `/herdr-mcp`. The setup agent should substitute the real URL before handing over a template.
 
-**The client must support MCP 2026-07-28 over Streamable HTTP.** Older protocols are rejected. A connector that only supports the 2025 protocol cannot use this release. Confirm protocol support in the actual client before configuring it. The templates below specify endpoint and authentication, not proof of protocol compatibility.
+**Supported MCP revisions: 2025-03-26, 2025-06-18 and 2026-07-28 over Streamable HTTP.** A 2025 client's `initialize` request receives its requested version when supported. The official SDK handles negotiation. The 2026 protocol uses `server/discover` and supports push subscriptions. These MCP client revisions are independent of the requirement to run current Herdr.
 
 **HUMAN:** paste the existing token directly into the client's protected header field, or load it into the desktop client's environment. Never send it through chat. This server uses a bearer header, not OAuth.
 
@@ -64,7 +64,9 @@ For a client that wants a bearer-token field rather than a header, enter only th
 
 ## Verify discovery and long waits
 
-The bridge requires the official MCP 2026-07-28 protocol. With SDK v2, select `versionNegotiation: { mode: { pin: '2026-07-28' } }` when constructing `Client`. The SDK's default mode is not sufficient. Push requires notification handling beyond tool discovery. See [push clients](push.md). Grok Bot and Cursor notification delivery into model turns has not been verified.
+Ordinary tools and waits work with all three supported revisions. Push requires MCP 2026-07-28 and notification handling beyond tool discovery. With SDK v2, select `versionNegotiation: { mode: { pin: '2026-07-28' } }` when constructing a push client. See [push clients](push.md). Grok Bot and Cursor notification delivery into model turns has not been verified.
+
+The endpoint is stateless and POST-only. A standalone GET receives 405 by design; a successful Streamable HTTP initialization does not need that GET stream. The deployment gate checks both 2025 initialization versions and subsequent tool calls before restarting.
 
 Ask the connected agent to call `herdr_skill`, then `herdr` with `{"args":["pane","list"]}`. Both must succeed before calling setup complete.
 

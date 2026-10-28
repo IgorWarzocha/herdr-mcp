@@ -1,6 +1,6 @@
 {
   "name": "herdr-mcp",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Thin MCP pass-through to the Herdr CLI: two tools (herdr_skill, herdr) so remote agents can list, read and message your Herdr panes.",
   "license": "MIT",
   "author": "Igor Warzocha",

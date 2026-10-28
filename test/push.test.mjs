@@ -89,16 +89,42 @@ test('official modern subscriptions acknowledge first, filter updates, and expos
   assert.equal(await empty.closed, 'graceful');
 });
 
-test('old protocol requests are rejected before any Herdr command runs', async t => {
-  let calls = 0;
-  const { url } = await host(t, { async run() { calls++; return snapshotResult(snapshot()); } });
-  const response = await fetch(url, { method: 'POST', headers: {
-    Authorization: 'Bearer push-test', 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream',
-  }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'herdr', arguments: { args: ['list'] } } }) });
-  const body = await response.json();
-  assert.ok(body.error);
-  assert.match(body.error.message, /protocol/i);
-  assert.equal(calls, 0);
+for (const version of ['2025-03-26', '2025-06-18']) test(`${version} initialize echoes the client version and serves subsequent tool calls`, async t => {
+  const calls = [];
+  const { url } = await host(t, { async run(args) {
+    calls.push(args); return args[0] === '--skill' ? { ...ok, stdout: 'Installed guide unchanged' } : snapshotResult(snapshot());
+  } });
+  const post = async (body, initialized = false) => {
+    const response = await fetch(url, { method: 'POST', headers: {
+      Authorization: 'Bearer push-test', 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream',
+      ...(initialized && version !== '2025-03-26' ? { 'MCP-Protocol-Version': version } : {}),
+    }, body: JSON.stringify({ jsonrpc: '2.0', ...body }) });
+    if (!Object.hasOwn(body, 'id')) { assert.equal(response.status, 202); return; }
+    assert.equal(response.status, 200);
+    const wire = await response.text();
+    const result = response.headers.get('content-type')?.startsWith('text/event-stream')
+      ? wire.split('\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6))).find(frame => frame.id === body.id)
+      : JSON.parse(wire);
+    assert.ok(result?.result, wire);
+    assert.equal(result.error, undefined);
+    return result.result;
+  };
+  const handshake = await post({ id: 1, method: 'initialize', params: {
+    protocolVersion: version, capabilities: {}, clientInfo: { name: 'grok-connector-smoke', version: '1' },
+  } });
+  assert.equal(handshake.protocolVersion, version);
+  assert.equal(handshake.capabilities.resources.subscribe, false);
+  assert.deepEqual(calls, [], 'initialization must not inspect Herdr');
+  await post({ method: 'notifications/initialized' }, true);
+  assert.deepEqual((await post({ id: 2, method: 'tools/list' }, true)).tools.map(tool => tool.name), ['herdr_skill', 'herdr']);
+  const skill = await post({ id: 3, method: 'tools/call', params: { name: 'herdr_skill', arguments: {} } }, true);
+  assert.equal(skill.content[0].text, 'Installed guide unchanged');
+  const listed = await post({ id: 4, method: 'tools/call', params: { name: 'herdr', arguments: { args: ['list'] } } }, true);
+  assert.equal(listed.isError, false);
+  const result = JSON.parse(listed.content[0].text);
+  assert.equal(result.code, 'ok');
+  assert.equal(JSON.parse(result.stdout).panes[0].name, 'reviewer');
+  assert.deepEqual(calls, [['--skill'], ['api', 'snapshot']]);
 });
 
 test('subscription limits leave room for tool calls and disconnected streams release capacity', { timeout: 5000 }, async t => {

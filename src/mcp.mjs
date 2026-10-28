@@ -11,9 +11,10 @@ const schemas = {
 const inputSchemas = Object.fromEntries(Object.entries(schemas).map(([name, schema]) =>
   [name, z.toJSONSchema(schema, { io: 'input', target: 'draft-2020-12' })]));
 
-export function createMcpServer({ runner, updates, waitMaxMs }) {
-  const server = new Server({ name: 'herdr-mcp', version: '0.2.0' }, {
-    capabilities: { tools: { listChanged: false }, resources: { listChanged: false, subscribe: true } },
+export function createMcpServer({ runner, updates, waitMaxMs, era }) {
+  const server = new Server({ name: 'herdr-mcp', version: '0.2.1' }, {
+    supportedProtocolVersions: ['2026-07-28', '2025-06-18', '2025-03-26'],
+    capabilities: { tools: { listChanged: false }, resources: { listChanged: false, subscribe: era === 'modern' } },
   });
   server.setRequestHandler('tools/list', () => ({ tools: [
     { name: 'herdr_skill', description: 'Read the installed Herdr CLI guide verbatim', inputSchema: inputSchemas.herdr_skill },

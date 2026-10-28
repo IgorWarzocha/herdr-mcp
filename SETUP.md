@@ -52,7 +52,7 @@ Select the service path before continuing:
 - **macOS:** use the shipped launchd plist, not systemd. A LaunchAgent requires a logged-in GUI user session.
 - **Windows with WSL2:** prepare systemd using [the Windows recipe](docs/setup.md#windows-wsl2-with-systemd) first. Herdr, Node, the bridge and the tunnel must run inside the same distribution. Ask before `wsl --shutdown`, which stops all WSL distributions.
 
-**verify:** current Node at least 26.12.1, current Herdr at least 0.9.5, Pi and Git available, the selected service route works, and the tunnel prerequisites are met. The MCP client must support protocol 2026-07-28. **STOP and ask the human** for missing software you cannot install, provider logins, or any fix needing administrator access. Report the failing check without credentials.
+**verify:** current Node at least 26.12.1, current Herdr at least 0.9.5, Pi and Git available, the selected service route works, and the tunnel prerequisites are met. The MCP client must support 2025-03-26, 2025-06-18 or 2026-07-28 over Streamable HTTP. **STOP and ask the human** for missing software you cannot install, provider logins, or any fix needing administrator access. Report the failing check without credentials.
 
 ## 1. Install
 ```sh
@@ -87,7 +87,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:$PORT/mcp     
 HERDR_MCP_URL="http://127.0.0.1:$PORT/mcp" npm run check:connection
 ```
 
-The connection check reads the existing token privately and verifies MCP 2026-07-28, both tools and pane discovery without printing pane contents.
+The connection check reads the existing token privately and verifies all three supported MCP revisions, both tools and pane discovery without printing pane contents.
 
 ## 4. Expose through the chosen route
 Run only the route chosen above. For Cloudflare, skip the Tailscale commands and follow [the Cloudflare recipe](docs/setup.md#cloudflare-tunnel). That recipe sets `URL` too.
@@ -112,7 +112,7 @@ Verify public routes from outside the tailnet, or private Serve from the actual 
 ## 5. Connect clients (HUMAN pastes the token)
 Render the selected [connector template](docs/clients.md) with the actual verified URL, not `$URL` or an example hostname. Give the user the exact token file path separately. Leave only the secret for **HUMAN** to paste directly into the client's protected field or environment. Do not put it into chat or tracked configuration. Explain that the bridge uses Streamable HTTP with bearer headers, not OAuth or legacy SSE.
 
-**verify:** the client negotiates MCP 2026-07-28 and discovers `herdr_skill` and `herdr`. If it cannot use that protocol or send a custom Authorization header, stop and report the incompatibility. Do not add an old-protocol fallback or remove authentication to make it work.
+**verify:** the client negotiates a supported MCP revision and discovers `herdr_skill` and `herdr`. If it cannot use a supported revision or send a custom Authorization header, stop and report the incompatibility. Do not remove authentication to make it work.
 
 ## 6. End-to-end test
 Use `$URL` from step 4 (or `URL=http://127.0.0.1:$PORT/mcp` for a local-only/trial run).
