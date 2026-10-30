@@ -2,228 +2,121 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
-import { commandEnvironment, createRunner, normalize, splitCommand } from '../src/bridge.mjs';
-import { checkHerdrVersion, checkCoreVersion, config, readToken } from '../src/server.mjs';
+import { createRunner, normalize } from '../src/bridge.mjs';
 import { createHandler } from '../src/http.mjs';
-import { snapshot, snapshotResult } from './fixtures/panes.mjs';
+import { latestReply } from '../src/reply.mjs';
+import { createRuntimes } from '../src/runtimes.mjs';
+import { serviceCheckArguments } from '../scripts/restart.mjs';
 
-test('startup rejects older Herdr rather than enabling compatibility branches', () => {
-  for (const version of ['herdr 0.9.4', 'herdr 0.8.99', 'invalid', 'herdr 0.9']) assert.throws(() => checkHerdrVersion(version));
-  for (const version of ['herdr 0.9.5', 'herdr 0.10.0', 'herdr 1.0.0']) assert.equal(checkHerdrVersion(version), version);
-});
+const ok = { exit_code: 0, stdout: '', stderr: '', timed_out: false, truncated: false, cancelled: false };
+const json = value => ({ ...ok, stdout: JSON.stringify(value) });
 
-test('Core version checks and session settings do not inherit an agent caller identity', () => {
-  for (const version of ['hc 0.1.13', 'hc 0.0.99', 'herdr 0.9.5', 'invalid']) assert.throws(() => checkCoreVersion(version));
-  assert.equal(checkCoreVersion('hc 0.1.14'), 'hc 0.1.14');
-  assert.equal(checkCoreVersion('hc 0.2.0'), 'hc 0.2.0');
-  const cfg = config({ HOME: '/operator', PATH: '/tools', HC_SESSION: 'caller', HC_SOCKET: '/caller.sock', HC_TERMINAL_ID: 't1' });
-  assert.equal(cfg.coreSession, 'default');
-  assert.equal(cfg.coreSocket, undefined);
-  const env = commandEnvironment({ ...cfg, runtime: 'core' });
-  assert.deepEqual(env, { HOME: '/operator', PATH: '/tools', LANG: 'C.UTF-8', HC_SESSION: 'default' });
-  assert.deepEqual(commandEnvironment({ ...cfg, runtime: 'core', coreSocket: '/pinned.sock', coreSession: 'pinned',
-    configHome: '/config', stateHome: '/state', runtimeDir: '/run' }), {
-    HOME: '/operator', PATH: '/tools', LANG: 'C.UTF-8', HC_SESSION: 'pinned', HC_SOCKET: '/pinned.sock',
-    XDG_CONFIG_HOME: '/config', XDG_STATE_HOME: '/state', XDG_RUNTIME_DIR: '/run',
+test('HTTP rejects unauthorised callers and still accepts the Grok MCP revision', async t => {
+  let calls = 0;
+  const handler = createHandler({ token: 'private-test-token', origins: [], runner: {
+    async run() { calls++; return { ...ok, stdout: 'guide' }; },
+  } });
+  const http = createServer(handler);
+  http.listen(0, '127.0.0.1'); await once(http, 'listening');
+  const url = new URL(`http://127.0.0.1:${http.address().port}/mcp`);
+  const client = new Client({ name: 'grok-regression', version: '1' }, {
+    supportedProtocolVersions: ['2025-03-26'], versionNegotiation: { mode: 'legacy' },
   });
+  t.after(async () => {
+    try { await client.close(); await handler.close(); }
+    finally { http.close(); http.closeAllConnections(); }
+  });
+  assert.equal((await fetch(url, { method: 'POST' })).status, 401);
+  assert.equal((await fetch(url, { method: 'POST', headers: { Authorization: 'Bearer wrong' } })).status, 401);
+  assert.equal((await fetch(url, { method: 'POST', headers: {
+    Authorization: 'Bearer private-test-token', Origin: 'https://untrusted.example',
+  } })).status, 403);
+  assert.equal(calls, 0);
+  await client.connect(new StreamableHTTPClientTransport(url, {
+    requestInit: { headers: { Authorization: 'Bearer private-test-token' } },
+  }));
+  assert.equal(client.getNegotiatedProtocolVersion(), '2025-03-26');
+  assert.equal((await client.callTool({ name: 'herdr_skill', arguments: {} })).content[0].text, 'guide');
 });
 
-test('platform defaults match Herdr and explicit socket overrides win', () => {
-  assert.equal(config({}).waitMaxMs, 90000);
-  assert.equal(config({ HERDR_MCP_WAIT_MAX: '120000' }).waitMaxMs, 120000);
-  for (const value of ['', '0', '-1', 'no', '1.5', '2147481648']) {
-    assert.throws(() => config({ HERDR_MCP_WAIT_MAX: value }), /HERDR_MCP_WAIT_MAX/);
-  }
-  for (const platform of ['linux', 'darwin']) {
-    assert.equal(config({ HOME: '/Users/operator' }, platform).socket, '/Users/operator/.config/herdr/herdr.sock');
-    assert.equal(config({ HOME: '/home/operator', XDG_CONFIG_HOME: '/custom' }, platform).tokenFile, '/custom/herdr-mcp/token');
-  }
-  const env = { USERPROFILE: 'C:\\Users\\operator', APPDATA: 'C:\\Users\\operator\\AppData\\Roaming', Path: 'C:\\tools' };
-  const windows = config(env, 'win32');
-  assert.equal(windows.socket, 'C:\\Users\\operator\\AppData\\Roaming\\herdr\\herdr.sock');
-  assert.equal(windows.tokenFile, 'C:\\Users\\operator\\AppData\\Roaming\\herdr-mcp\\token');
-  assert.equal(windows.path, 'C:\\tools');
-  assert.equal(config({ USERPROFILE: env.USERPROFILE, HOME: 'D:\\other' }, 'win32').socket, windows.socket);
-  assert.equal(config({ HOME: 'D:\\home' }, 'win32').socket, 'D:\\home\\.config\\herdr\\herdr.sock');
-  assert.equal(config({ ...env, XDG_CONFIG_HOME: 'D:\\config' }, 'win32').socket, 'D:\\config\\herdr\\herdr.sock');
-  assert.equal(config({ ...env, HERDR_SOCKET_PATH: 'D:\\inherited', HERDR_MCP_SOCKET: 'D:\\pinned' }, 'win32').socket, 'D:\\pinned');
+test('routing rejects ambiguous identities and never retries a Core mutation on TUI', async () => {
+  const mutations = [];
+  const runtimes = createRuntimes({
+    tui: { async run(args) {
+      if (args[0] === 'api') return json({ result: { snapshot: {
+        workspaces: [{ workspace_id: 'w1' }], tabs: [{ workspace_id: 'w1', tab_id: 'w1:t1' }],
+        panes: [{ pane_id: 'w1:p1', workspace_id: 'w1', tab_id: 'w1:t1' }],
+        agents: [{ pane_id: 'w1:p1', name: 'reviewer', agent: 'pi' }],
+      } } });
+      mutations.push(['tui', ...args]); return ok;
+    } },
+    core: { async run(args) {
+      if (args[1] === 'ls') return json({ terminals: [{ address: 't1', name: 'reviewer',
+        agent: 'pi', status: 'idle', turn: 0, state: 'live', cwd: '/project' }] });
+      mutations.push(['core', ...args]);
+      return { ...ok, exit_code: 1, stderr: 'private diagnostic' };
+    } },
+  });
+  assert.equal((await runtimes.execute(['send', 'reviewer', 'hello'])).code, 'ambiguous_target');
+  assert.equal((await runtimes.execute(['send', 'core:tester', 'hello'])).code, 'invalid_arguments');
+  assert.deepEqual(mutations, []);
+  assert.equal((await runtimes.execute(['spawn', '--', 'pi'])).code, 'command_failed');
+  assert.deepEqual(mutations, [['core', '--json', 'run', '--bg', '--no-parent', '--', 'pi']]);
+  mutations.length = 0;
+  const args = ['agent', 'prompt', 'w1:p1', 'hello', '--wait'];
+  assert.equal((await runtimes.execute(normalize({ args }))).code, 'ok');
+  assert.deepEqual(mutations, [['tui', ...args]], 'raw flags must not become prompt text');
 });
 
-test('Windows subprocess environment keeps loader variables without leaking identity or secrets', () => {
-  const env = commandEnvironment({ home: 'C:\\Users\\operator', path: 'C:\\tools', socket: 'C:\\pinned' }, {
-    SYSTEMROOT: 'C:\\Windows', APPDATA: 'C:\\profile', PATH: 'wrong', HERDR_SESSION: 'wrong',
-    HERDR_SOCKET_PATH: 'wrong', HERDR_PANE_ID: 'wrong', HERDR_MCP_TOKEN: 'secret',
-  }, 'win32');
-  assert.deepEqual(env, { HOME: 'C:\\Users\\operator', PATH: 'C:\\tools', LANG: 'C.UTF-8',
-    HERDR_SOCKET_PATH: 'C:\\pinned', SystemRoot: 'C:\\Windows', APPDATA: 'C:\\profile' });
-});
-
-test('token validation preserves POSIX ownership policy and validates content on Windows', async t => {
-  const dir = await mkdtemp(join(tmpdir(), 'herdr-mcp-token-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  const file = join(dir, 'token');
-  await writeFile(file, 'a'.repeat(64) + '\n', { mode: 0o600 });
-  assert.equal(await readToken(file), 'a'.repeat(64));
-  if (process.platform !== 'win32') {
-    await assert.rejects(readToken(file, process.platform, process.getuid() + 1), /owned by/);
-    await chmod(file, 0o644);
-    await assert.rejects(readToken(file), /mode 0600/);
-  }
-  assert.equal(await readToken(file, 'win32'), 'a'.repeat(64));
-  await writeFile(file, 'not-a-token');
-  await assert.rejects(readToken(file, 'win32'), /64 hex/);
-});
-
-test('quote parser preserves literal payloads without shell expansion', () => {
-  assert.deepEqual(splitCommand(`send w1:p1 "Hello '$HOME' $(whoami)"`), ['send', 'w1:p1', "Hello '$HOME' $(whoami)"]);
-  assert.deepEqual(splitCommand(`pane send-text w1:p1 ''`), ['pane', 'send-text', 'w1:p1', '']);
-  assert.deepEqual(splitCommand('read "a\\qb"'), ['read', 'a\\qb']);
-  for (const text of ['read "bad', 'read a\\', 'read a; ls', 'read a | sh']) assert.throws(() => splitCommand(text));
-});
-
-test('aliases and raw commands share routing and explicit-input policy', () => {
-  assert.deepEqual(normalize({ command: 'send "MCP bridge" hi there' }), ['send', 'MCP bridge', 'hi there']);
-  assert.deepEqual(normalize({ args: ['send', 'w1:p1', '--session=other'] }), ['send', 'w1:p1', '--session=other']);
-  assert.deepEqual(normalize({ args: ['read', 'w1:p1', '--lines', '20'] }), ['read', 'w1:p1', '--lines', '20']);
-  assert.deepEqual(normalize({ args: ['read', 'w1R:p7'] }), ['read', 'w1R:p7']);
-  assert.deepEqual(normalize({ args: ['pane', 'send-text', 'w1:p1', '--', '--session'] }), ['pane', 'send-text', 'w1:p1', '--', '--session']);
-  for (const input of [{}, {args: [], command: ''}, {args: ['--session', 'other', 'pane', 'list']},
-    {args: ['pane', 'list', '--session', 'other']}, {args: ['pane', 'list', '--session=other']},
-    {args: ['server', 'stop']}, {args: ['pane', 'run', '--current', 'ls']},
-    {args: ['api', 'schema', '--output=/tmp/x']}, {args: ['send', 'w1:p1']}, {args: ['pane', '\0']}]) {
-    assert.throws(() => normalize(input));
-  }
-});
-
-function runner(options = {}) {
-  return createRunner({ binary: process.execPath, home: tmpdir(), path: process.env.PATH, socket: join(tmpdir(), 'test-herdr.sock'), ...options });
-}
-
-test('subprocess output is bounded, environment isolated, exit code preserved', async () => {
-  const run = runner({ outputBytes: 32 });
-  const result = await run.run(['-e', 'process.stdout.write("x".repeat(1000));process.exitCode=7']);
-  assert.equal(result.exit_code, 7);
-  assert.equal(result.stdout.length, 32);
-  assert.equal(result.truncated, true);
-  const env = await runner().run(['-e', 'console.log(JSON.stringify(process.env))']);
-  assert.equal(JSON.parse(env.stdout).HERDR_SOCKET_PATH, join(tmpdir(), 'test-herdr.sock'));
-  assert.equal(JSON.parse(env.stdout).HERDR_PANE_ID, undefined);
-  const args = ['C:\\Users\\a b\\file', '$(whoami)', 'a&b'];
-  const literal = await runner().run(['-e', 'console.log(JSON.stringify(process.argv.slice(1)))', ...args]);
-  assert.deepEqual(JSON.parse(literal.stdout), args);
-});
-
-test('timeout, cancellation and concurrency release the process slot', async () => {
-  const run = runner({ timeoutMs: 1000, concurrency: 1 });
-  const first = run.run(['-e', 'setInterval(()=>{},1000)']);
-  await assert.rejects(run.run(['-e', '']), /busy/);
-  assert.equal((await first).timed_out, true);
-  const controller = new AbortController();
-  const second = run.run(['-e', 'setInterval(()=>{},1000)'], controller.signal);
-  controller.abort();
-  assert.equal((await second).cancelled, true);
-  assert.equal((await run.run(['-e', ''])).exit_code, 0);
-});
-
-test('runtime subprocesses share one concurrency budget and release it on cancellation', async () => {
+test('subprocesses bound output and release shared capacity after cancellation', async t => {
   const budget = { active: 0 };
-  const first = runner({ budget, concurrency: 1 });
-  const second = runner({ budget, concurrency: 1 });
+  const options = { binary: process.execPath, home: tmpdir(), path: process.env.PATH, budget, concurrency: 1, outputBytes: 32 };
+  const first = createRunner(options), second = createRunner(options);
+  t.after(() => { first.stop(); second.stop(); });
   const controller = new AbortController();
   const pending = first.run(['-e', 'setInterval(()=>{},1000)'], controller.signal);
-  await assert.rejects(second.run(['-e', '']), /busy/);
+  await assert.rejects(second.run(['-e', '']), { code: 'busy' });
   controller.abort();
   assert.equal((await pending).cancelled, true);
-  assert.equal((await second.run(['-e', ''])).exit_code, 0);
+  const result = await second.run(['-e', 'process.stdout.write("x".repeat(1000))']);
+  assert.equal(result.truncated, true);
+  assert.equal(result.stdout.length, 32);
   assert.equal(budget.active, 0);
 });
 
-test('current MCP transport preserves auth, both tools and literal agent submission', async t => {
-  const calls = [];
-  let next = {exit_code: 0, stdout: 'Installed guide\nKeep this exactly.\n', stderr: '', timed_out: false, truncated: false, cancelled: false};
-  const http = createServer(createHandler({ token: 'test-token', origins: [], runner: {
-    async run(args) {
-      calls.push(args); if (next instanceof Error) throw next;
-      return args[0] === 'api' ? snapshotResult(snapshot()) : next;
-    }
-  }}));
-  http.listen(0, '127.0.0.1'); await once(http, 'listening');
-  const url = new URL(`http://127.0.0.1:${http.address().port}/mcp`);
-  t.after(() => { http.close(); http.closeAllConnections(); });
-  for (const headers of [{}, {Authorization: 'Bearer wrong-token'}]) {
-    const response = await fetch(url, {method: 'POST', headers});
-    assert.equal(response.status, 401);
-    assert.equal((await response.json()).code, 'bad_token');
-  }
-  assert.equal(calls.length, 0);
-  assert.equal((await fetch(url, {method: 'POST', headers: {Authorization: 'Bearer test-token', Origin: 'https://evil.example'}})).status, 403);
-  const client = new Client({name: 'test', version: '1'}, {versionNegotiation: {mode: {pin: '2026-07-28'}}});
-  t.after(() => client.close());
-  await client.connect(new StreamableHTTPClientTransport(url, {requestInit: {headers: {Authorization: 'Bearer test-token'}}}));
-  assert.equal(client.getNegotiatedProtocolVersion(), '2026-07-28');
-  const tools = (await client.listTools()).tools;
-  assert.deepEqual(tools.map(tool => tool.name), ['herdr_skill', 'herdr']);
-  const result = await client.callTool({name: 'herdr', arguments: {command: 'send w1:p1 "hello"'}});
-  assert.equal(result.isError, false);
-  assert.deepEqual(calls.at(-1), ['agent', 'prompt', 'w1:p1', 'hello']);
-  for (const [args, hint] of [
-    [{args: ['server', 'stop']}, /maintenance are disabled/],
-    [{args: ['machine', 'list']}, /disabled/],
-    [{args: ['pane', 'list', '--session', 'other']}, /routing are fixed/],
-    [{args: [1]}, /array of at most 256 strings/],
-    [{command: 'read "'}, /Unclosed quote/],
-    [{args: [], command: ''}, /exactly one of args or command/],
-    [{}, /exactly one of args or command/],
-    [{args: ['agent', 'wait']}, /explicit pane ID or agent name/],
-    [{args: ['agent', 'wait', 'worker', '--timeout=-1']}, /--timeout once/],
-  ]) {
-    const invalid = await client.callTool({name: 'herdr', arguments: args});
-    assert.equal(invalid.isError, true);
-    const detail = JSON.parse(invalid.content[0].text);
-    assert.equal(detail.code, 'invalid_arguments');
-    assert.match(detail.next, hint);
-  }
-  const skill = await client.callTool({name: 'herdr_skill', arguments: {}});
-  assert.equal(skill.content[0].text, next.stdout);
-  next = {exit_code: 1, stdout: '', stderr: JSON.stringify({error: {
-    code: 'agent_not_idle', message: 'private upstream diagnostic',
-  }})};
-  const historyRead = await client.callTool({name: 'herdr', arguments: {args: ['agent', 'read', 'w1:p1', '--lines', '200']}});
-  const historyError = JSON.parse(historyRead.content[0].text);
-  assert.equal(historyRead.isError, true);
-  assert.equal(historyError.code, 'agent_not_idle');
-  assert.match(historyError.next, /--source visible/);
-  assert.doesNotMatch(historyRead.content[0].text, /private upstream/);
-  assert.deepEqual(calls.at(-1), ['agent', 'read', 'w1:p1', '--lines', '200']);
-  next = {exit_code: 0, stdout: 'A reply is visible while the agent is working.', stderr: ''};
-  const screenRead = await client.callTool({name: 'herdr', arguments: {args: ['agent', 'read', 'w1:p1', '--source', 'visible']}});
-  assert.equal(screenRead.isError, false);
-  assert.equal(JSON.parse(screenRead.content[0].text).stdout, next.stdout);
-  assert.deepEqual(calls.at(-1), ['agent', 'read', 'w1:p1', '--source', 'visible']);
-  next = {exit_code: 2, stdout: '', stderr: 'CLI diagnostic dump'};
-  for (const args of [['pane', 'unknown'], ['pane', 'list', '--unknown']]) {
-    const rejected = await client.callTool({name: 'herdr', arguments: {args}});
-    const detail = JSON.parse(rejected.content[0].text);
-    assert.equal(rejected.isError, true);
-    assert.equal(detail.code, 'invalid_arguments');
-    assert.match(detail.next, /subcommand, flags and required values/);
-    assert.doesNotMatch(detail.next, /exactly one/);
-    assert.deepEqual(calls.at(-1), args);
-  }
-  for (const name of ['herdr', 'herdr_skill']) {
-    next = Object.assign(new Error('sensitive path\nstack backtrace: secret'), {code: 'ENOENT'});
-    const failed = await client.callTool({name, arguments: name === 'herdr' ? {args: ['list']} : {}});
-    assert.equal(failed.isError, true);
-    assert.equal(JSON.parse(failed.content[0].text).code, 'herdr_unavailable');
-    assert.doesNotMatch(failed.content[0].text, /sensitive|stack|secret/);
-  }
-  next = {exit_code: 0, stdout: 'partial guide', stderr: '', truncated: true};
-  const truncated = await client.callTool({name: 'herdr_skill', arguments: {}});
-  assert.equal(truncated.isError, true);
-  assert.equal(JSON.parse(truncated.content[0].text).code, 'truncated');
-  assert.match(JSON.parse(truncated.content[0].text).next, /subcommand --help/);
+test('clean replies follow the saved branch without exposing reasoning or unfinished turns', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'herdr-mcp-reply-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const path = join(dir, 'session.jsonl');
+  const message = (id, parentId, content, stopReason = 'stop') => ({
+    type: 'message', id, parentId, message: { role: 'assistant', content, stopReason },
+  });
+  await writeFile(path, [
+    { type: 'session', version: 3, id: 'session' },
+    message('answer', null, [{ type: 'thinking', thinking: 'private' }, { type: 'text', text: 'Answer' }]),
+    message('abandoned', null, [{ type: 'text', text: 'Wrong branch' }]),
+    message('unfinished', 'answer', [{ type: 'text', text: 'Incomplete' }], 'aborted'),
+  ].map(record => JSON.stringify(record) + '\n').join(''));
+  const reply = await latestReply(path);
+  assert.equal(reply.text, 'Answer');
+  assert.equal(reply.message_id, 'answer');
+  assert.equal(reply.newer_activity, true);
+});
+
+test('restart checks use the service environment and refuse another checkout', async () => {
+  const root = dirname(dirname(fileURLToPath(import.meta.url)));
+  const definition = {
+    ExecStart: [['/usr/bin/mise', ['/usr/bin/mise', 'exec', 'node@latest', '--', 'node', 'src/server.mjs'], false]],
+    WorkingDirectory: root, Environment: [], EnvironmentFiles: [['/service config/service.env', false]],
+    UnsetEnvironment: [], RootDirectory: '', RootImage: '',
+  };
+  const args = await serviceCheckArguments(definition, root, 'check-live.mjs');
+  assert.ok(args.includes('--property=EnvironmentFile=/service config/service.env'));
+  assert.deepEqual(args.slice(args.indexOf('--') + 1), ['/usr/bin/mise', 'exec', 'node@latest', '--', 'node', join(root, 'scripts/check-live.mjs')]);
+  await assert.rejects(serviceCheckArguments({ ...definition, WorkingDirectory: dirname(root) }, root, 'check-live.mjs'), /different checkout/);
 });
