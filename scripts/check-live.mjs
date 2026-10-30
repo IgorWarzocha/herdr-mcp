@@ -18,6 +18,8 @@ import { commandEnvironment, createRunner } from '../src/bridge.mjs';
 import { createHandler } from '../src/http.mjs';
 import { FRIENDLY_VERBS } from '../src/friendly.mjs';
 import { checkProtocols } from './protocol-smoke.mjs';
+import { createRuntimes } from '../src/runtimes.mjs';
+import { coreSmoke } from './core-live.mjs';
 
 const exec = promisify(execFile);
 
@@ -33,7 +35,12 @@ async function until(check, timeoutMs = 10000) {
 export async function checkLive() {
   const cfg = config();
   const baseEnv = commandEnvironment(cfg);
-  const version = checkHerdrVersion((await exec(cfg.binary, ['--version'], { env: baseEnv, timeout: 5000 })).stdout);
+  let version;
+  try { version = checkHerdrVersion((await exec(cfg.binary, ['--version'], { env: baseEnv, timeout: 5000 })).stdout); }
+  catch (error) {
+    if (error.code === 'ENOENT' && !cfg.tuiRequired) return checkCoreOnly(cfg);
+    throw error;
+  }
   const root = await mkdtemp(join(tmpdir(), 'herdr-mcp-live-'));
   const name = `mcp-smoke-${randomBytes(6).toString('hex')}`;
   const configHome = join(root, 'config');
@@ -44,7 +51,7 @@ export async function checkLive() {
     TERM: 'xterm-256color', COLORTERM: 'truecolor', ZDOTDIR: root };
   delete env.HERDR_SOCKET_PATH;
   const runner = createRunner({ ...cfg, socket });
-  let server, serverExit, exited = false, startupError, http, handler, client;
+  let server, serverExit, exited = false, startupError, http, handler, client, core;
   const checked = new Set();
   const cli = async args => {
     const result = await runner.run(args);
@@ -72,7 +79,8 @@ export async function checkLive() {
     const shellId = shell.root_pane.pane_id;
     await cli(['tab', 'rename', shell.tab.tab_id, 'Shell smoke tab']);
     const token = randomBytes(32).toString('hex');
-    handler = createHandler({ token, runner, origins: [] });
+    core = await coreSmoke(cfg, root);
+    handler = createHandler({ token, runner: createRuntimes({ tui: runner, core: core?.runner }), origins: [] });
     http = createServer(handler); http.listen(0, '127.0.0.1'); await once(http, 'listening');
     await checkProtocols(`http://127.0.0.1:${http.address().port}/mcp`, token);
     client = new Client({ name: 'installed-herdr-smoke', version: '0.2.0' }, { versionNegotiation: { mode: { pin: '2026-07-28' } } });
@@ -82,7 +90,7 @@ export async function checkLive() {
     const call = async args => {
       const response = await client.callTool({ name: 'herdr', arguments: { args } }, { timeout: 35000 });
       const result = JSON.parse(response.content[0].text);
-      assert.equal(result.code, 'ok', `${args[0]} failed: ${result.code}. ${result.next ?? ''}`);
+      assert.equal(result.code, 'ok', `${args.slice(0, 2).join(' ')} failed: ${result.code} (state: ${result.state ?? 'unknown'}). ${result.next ?? ''}`);
       assert.equal(response.isError, false);
       checked.add(args[0]);
       return result;
@@ -126,21 +134,68 @@ export async function checkLive() {
     assert.ok((await call(['read', 'mcp-smoke'])).stdout.length > 0);
     assert.equal((await call(['reply', 'Pi smoke tab'])).stdout, reply);
     assert.deepEqual([...checked].sort(), [...FRIENDLY_VERBS].sort(), 'every advertised friendly verb needs a live smoke case');
-    console.log(`ok: ${version}; live list/send/read/wait/reply; agent and shell sends; no model calls`);
+    assert.equal((await call(['get', piId])).pane_id, piId);
+    // Also verify the fallback branch against the installed TUI, even when
+    // Core is present and owns the public spawn preference above it.
+    const tuiOnly = createRuntimes({ tui: runner });
+    const spawnedSession = join(root, 'spawned-pi.jsonl');
+    await writeFile(spawnedSession, await readFile(sessionFile));
+    const spawned = await tuiOnly.execute(['spawn', '--name', 'fallback-smoke', '--cwd', root, '--', 'pi',
+      '--offline', '--no-extensions', '--no-mcp', '--no-skills', '--no-prompt-templates', '--no-themes', '--no-context-files', '--no-tools',
+      '--extension', join(agentDir, 'extensions', 'herdr-agent-state.ts'), '--session', spawnedSession]);
+    assert.equal(spawned.code, 'ok', `TUI fallback spawn failed: ${spawned.code}. ${spawned.next ?? ''}`);
+    assert.ok(!spawned.pane_id.startsWith('core:'));
+    assert.equal((await tuiOnly.execute(['read', spawned.pane_id])).code, 'ok');
+    assert.equal((await tuiOnly.execute(['close', spawned.pane_id])).code, 'ok');
+    if (core) await core.exercise(call);
+    await call(['close', piId]);
+    console.log(`ok: ${version}; live spawn/list/get/send/read/wait/reply/close; agent and shell sends; no model calls`);
   } finally {
     try { await client?.close(); } finally {
       try { await handler?.close(); } finally {
         http?.close(); http?.closeAllConnections();
-        if (server && !exited) {
-          try { await runner.run(['server', 'stop'], undefined, { timeoutMs: 3000 }); }
-          finally {
-            if (!exited) server.kill('SIGTERM');
-            const kill = setTimeout(() => { if (!exited) server.kill('SIGKILL'); }, 1000);
-            await serverExit; clearTimeout(kill);
+        try { await core?.close(); } finally {
+          try {
+            if (server && !exited) {
+              try { await runner.run(['server', 'stop'], undefined, { timeoutMs: 3000 }); }
+              finally {
+                if (!exited) server.kill('SIGTERM');
+                const kill = setTimeout(() => { if (!exited) server.kill('SIGKILL'); }, 1000);
+                await serverExit; clearTimeout(kill);
+              }
+            }
+          } finally {
+            runner.stop();
+            await rm(root, { recursive: true, force: true });
           }
         }
-        runner.stop();
-        await rm(root, { recursive: true, force: true });
+      }
+    }
+  }
+}
+
+export async function checkCoreOnly(cfg) {
+  const root = await mkdtemp(join(tmpdir(), 'herdr-mcp-core-'));
+  let core, http, handler, client;
+  try {
+    core = await coreSmoke(cfg, root);
+    if (!core) throw new Error('Neither Herdr TUI nor Core is installed');
+    handler = createHandler({ token: 'private-core-smoke', runner: createRuntimes({ core: core.runner }), origins: [] });
+    http = createServer(handler); http.listen(0, '127.0.0.1'); await once(http, 'listening');
+    const url = new URL(`http://127.0.0.1:${http.address().port}/mcp`);
+    await checkProtocols(url, 'private-core-smoke');
+    client = new Client({ name: 'core-smoke', version: '1' }, { versionNegotiation: { mode: { pin: '2026-07-28' } } });
+    await client.connect(new StreamableHTTPClientTransport(url, { requestInit: { headers: { Authorization: 'Bearer private-core-smoke' } } }));
+    await core.exercise(async args => {
+      const result = JSON.parse((await client.callTool({ name: 'herdr', arguments: { args } })).content[0].text);
+      assert.equal(result.code, 'ok', `${args[0]}: ${result.code} ${result.next ?? ''}`);
+      return result;
+    });
+  } finally {
+    try { await client?.close(); } finally {
+      try { await handler?.close(); } finally {
+        http?.close(); http?.closeAllConnections();
+        try { await core?.close(); } finally { await rm(root, { recursive: true, force: true }); }
       }
     }
   }

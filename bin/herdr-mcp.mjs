@@ -5,9 +5,7 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir, writeFile, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { execFileSync } from 'node:child_process';
-import { checkHerdrVersion, config, main, readToken } from '../src/server.mjs';
-import { commandEnvironment } from '../src/bridge.mjs';
+import { config, installedRuntimes, main, readToken } from '../src/server.mjs';
 
 const cmd = process.argv[2];
 const cfg = config();
@@ -21,15 +19,15 @@ if (cmd === 'token') {
 } else if (cmd === 'doctor') {
   let ok = true;
   const check = async (name, fn) => { try { console.log(`ok   ${name}: ${await fn()}`); } catch (e) { ok = false; console.log(`FAIL ${name}: ${e.message.split('\n')[0]}`); } };
-  const execOptions = { env: commandEnvironment(cfg), cwd: cfg.home, shell: false, windowsHide: true, timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] };
-  await check('herdr', () => {
-    const v = execFileSync(cfg.binary, ['--version'], execOptions).toString().trim();
-    return checkHerdrVersion(v);
-  });
-  await check('socket', () => {
-    // Let Herdr probe its own transport: a Unix socket on POSIX, a named pipe on Windows.
-    execFileSync(cfg.binary, ['pane', 'list'], execOptions);
-    return `${cfg.socket} (Herdr responded)`;
+  await check('runtimes', async () => {
+    const runtimes = await installedRuntimes(cfg);
+    try {
+      const result = await runtimes.directory();
+      if (result.code !== 'ok') throw new Error(result.next);
+      const directory = JSON.parse(result.stdout);
+      if (directory.unavailable?.length) throw new Error(directory.unavailable.map(item => `${item.runtime}: ${item.code}`).join(', '));
+      return `${directory.panes.length} local targets; Core preferred for new programs when installed`;
+    } finally { runtimes.stop(); }
   });
   await check('token', async () => { await readToken(cfg.tokenFile); return cfg.tokenFile; });
   process.exitCode = ok ? 0 : 1;

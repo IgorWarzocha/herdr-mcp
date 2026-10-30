@@ -1,5 +1,8 @@
 // The bridge owns recovery advice. Never forward exception messages or CLI diagnostics.
 const advice = {
+  runtime_unavailable: ['The target runtime cannot be reached.', 'Check the bridge runtime settings and doctor. No action was retried on another runtime.'],
+  target_blocked: ['The program is waiting for a decision.', 'Read the target and ask the user to resolve the prompt. No forced input was sent.'],
+  target_finished: ['The target program has ended.', 'Read its remaining output or spawn a new program. No input was retried elsewhere.'],
   herdr_not_running: ['Herdr cannot be reached.', 'Ask the user to start Herdr or check the pinned HERDR_MCP_SOCKET in the bridge environment.'],
   session_missing: ['The selected session is missing.', 'Ask the user to restore the intended session or correct the bridge socket. Session switching is disabled here.'],
   pane_not_found: ['No pane matches that target.', 'Refresh list and choose a current pane ID, agent name or unique label.'],

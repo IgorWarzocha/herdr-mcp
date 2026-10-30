@@ -46,6 +46,7 @@ export function normalize(input) {
   }
   if (!args.length) return ['--help'];
   const [verb, target, ...rest] = args;
+  if (['spawn', 'get', 'close'].includes(verb)) return args;
   if (verb === 'list') {
     if (args.length !== 1) throw new Error('Use list, or raw pane list / agent list');
     return ['list'];
@@ -71,9 +72,15 @@ export function normalize(input) {
   return args;
 }
 
-export function commandEnvironment({ socket, home, path }, source = process.env, platform = process.platform) {
+export function commandEnvironment({ socket, home, path, runtime = 'tui', coreSocket, coreSession = 'default', configHome, stateHome, runtimeDir }, source = process.env, platform = process.platform) {
   const env = { HOME: home, PATH: path, LANG: 'C.UTF-8' };
-  if (socket) env.HERDR_SOCKET_PATH = socket;
+  if (runtime === 'core') {
+    env.HC_SESSION = coreSession;
+    if (coreSocket) env.HC_SOCKET = coreSocket;
+    for (const [key, value] of Object.entries({ XDG_CONFIG_HOME: configHome, XDG_STATE_HOME: stateHome, XDG_RUNTIME_DIR: runtimeDir })) {
+      if (value) env[key] = value;
+    }
+  } else if (socket) env.HERDR_SOCKET_PATH = socket;
   // Keep Windows loader/profile variables, but never inherit pane identity or secrets.
   if (platform === 'win32') {
     for (const key of ['SystemRoot', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'PATHEXT', 'TEMP', 'TMP']) {
@@ -84,17 +91,16 @@ export function commandEnvironment({ socket, home, path }, source = process.env,
   return env;
 }
 
-export function createRunner({ binary, socket, home, path, timeoutMs = 25000, outputBytes = 131072, concurrency = 4 }) {
-  let active = 0;
+export function createRunner({ binary, timeoutMs = 25000, outputBytes = 131072, concurrency = 4, budget = { active: 0 }, ...environment }) {
   const children = new Set();
-  const env = commandEnvironment({ socket, home, path });
+  const env = commandEnvironment(environment);
   async function run(args, signal, { timeoutMs: callTimeoutMs = timeoutMs } = {}) {
-    if (active >= concurrency) throw new BridgeError('busy');
+    if (budget.active >= concurrency) throw new BridgeError('busy');
     if (signal?.aborted) throw new BridgeError('cancelled');
-    active++;
+    budget.active++;
     try {
       return await new Promise((resolve, reject) => {
-        const child = spawn(binary, args, { env, cwd: home, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+        const child = spawn(binary, args, { env, cwd: environment.home, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
         children.add(child);
         const chunks = { stdout: [], stderr: [] };
         let remaining = outputBytes, timedOut = false, truncated = false, cancelled = false, killTimer;
@@ -124,7 +130,7 @@ export function createRunner({ binary, socket, home, path, timeoutMs = 25000, ou
             stderr: Buffer.concat(chunks.stderr).toString('utf8'), timed_out: timedOut, truncated, cancelled });
         });
       });
-    } finally { active--; }
+    } finally { budget.active--; }
   }
   return { run, stop: () => { for (const child of children) child.kill('SIGKILL'); } };
 }
@@ -157,6 +163,7 @@ export function prepareWait(args, waitMaxMs = DEFAULT_WAIT_MAX_MS) {
 }
 
 export async function executeCommand(runner, args, signal, waitMaxMs = DEFAULT_WAIT_MAX_MS) {
+  if (runner.execute) return runner.execute(args, signal, waitMaxMs);
   const started = performance.now();
   if (args.length === 1 && args[0] === 'list') {
     return { ...await readDirectory(runner, signal), elapsed_ms: Math.round(performance.now() - started) };

@@ -7,13 +7,29 @@ import { join } from 'node:path';
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { commandEnvironment, createRunner, normalize, splitCommand } from '../src/bridge.mjs';
-import { checkHerdrVersion, config, readToken } from '../src/server.mjs';
+import { checkHerdrVersion, checkCoreVersion, config, readToken } from '../src/server.mjs';
 import { createHandler } from '../src/http.mjs';
 import { snapshot, snapshotResult } from './fixtures/panes.mjs';
 
 test('startup rejects older Herdr rather than enabling compatibility branches', () => {
   for (const version of ['herdr 0.9.4', 'herdr 0.8.99', 'invalid', 'herdr 0.9']) assert.throws(() => checkHerdrVersion(version));
   for (const version of ['herdr 0.9.5', 'herdr 0.10.0', 'herdr 1.0.0']) assert.equal(checkHerdrVersion(version), version);
+});
+
+test('Core version checks and session settings do not inherit an agent caller identity', () => {
+  for (const version of ['hc 0.1.13', 'hc 0.0.99', 'herdr 0.9.5', 'invalid']) assert.throws(() => checkCoreVersion(version));
+  assert.equal(checkCoreVersion('hc 0.1.14'), 'hc 0.1.14');
+  assert.equal(checkCoreVersion('hc 0.2.0'), 'hc 0.2.0');
+  const cfg = config({ HOME: '/operator', PATH: '/tools', HC_SESSION: 'caller', HC_SOCKET: '/caller.sock', HC_TERMINAL_ID: 't1' });
+  assert.equal(cfg.coreSession, 'default');
+  assert.equal(cfg.coreSocket, undefined);
+  const env = commandEnvironment({ ...cfg, runtime: 'core' });
+  assert.deepEqual(env, { HOME: '/operator', PATH: '/tools', LANG: 'C.UTF-8', HC_SESSION: 'default' });
+  assert.deepEqual(commandEnvironment({ ...cfg, runtime: 'core', coreSocket: '/pinned.sock', coreSession: 'pinned',
+    configHome: '/config', stateHome: '/state', runtimeDir: '/run' }), {
+    HOME: '/operator', PATH: '/tools', LANG: 'C.UTF-8', HC_SESSION: 'pinned', HC_SOCKET: '/pinned.sock',
+    XDG_CONFIG_HOME: '/config', XDG_STATE_HOME: '/state', XDG_RUNTIME_DIR: '/run',
+  });
 });
 
 test('platform defaults match Herdr and explicit socket overrides win', () => {
@@ -111,6 +127,19 @@ test('timeout, cancellation and concurrency release the process slot', async () 
   controller.abort();
   assert.equal((await second).cancelled, true);
   assert.equal((await run.run(['-e', ''])).exit_code, 0);
+});
+
+test('runtime subprocesses share one concurrency budget and release it on cancellation', async () => {
+  const budget = { active: 0 };
+  const first = runner({ budget, concurrency: 1 });
+  const second = runner({ budget, concurrency: 1 });
+  const controller = new AbortController();
+  const pending = first.run(['-e', 'setInterval(()=>{},1000)'], controller.signal);
+  await assert.rejects(second.run(['-e', '']), /busy/);
+  controller.abort();
+  assert.equal((await pending).cancelled, true);
+  assert.equal((await second.run(['-e', ''])).exit_code, 0);
+  assert.equal(budget.active, 0);
 });
 
 test('current MCP transport preserves auth, both tools and literal agent submission', async t => {

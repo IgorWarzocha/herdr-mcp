@@ -5,13 +5,13 @@ description: "Use when setting up herdr-mcp or operating Herdr through its MCP t
 
 For installation, follow [SETUP.md](SETUP.md): inspect, explain requirements, ask which tunnel and client, then verify each setup step. Platform recipes are in [docs/setup.md](docs/setup.md), and connector templates in [docs/clients.md](docs/clients.md). Stop when verification fails.
 
-Herdr runs on Linux, macOS and native Windows. Use systemd on Linux, the shipped launchd plist on macOS, or WSL2 with systemd for the Windows background setup. Native Windows foreground setup is in docs/setup.md. Keep Herdr, Node and the bridge in the same OS environment. A WSL bridge cannot control native Windows Herdr through its local socket.
+Herdr TUI and Core are separate runtimes. The bridge supports both at once or either alone. It needs TUI 0.9.5+ or Core (`hc`) 0.1.14+ on its service PATH. Herdr TUI runs on Linux, macOS and native Windows. Use systemd on Linux, the shipped launchd plist on macOS, or WSL2 with systemd for the Windows background setup. Native Windows foreground setup is in docs/setup.md. Keep each runtime, Node and the bridge in the same OS environment. A WSL bridge cannot control native Windows Herdr through its local socket.
 
 The token gives shell-equivalent access. Recommend a dedicated Herdr session. **HUMAN:** accept the risks, complete provider logins and administrator approvals, and paste the existing token into the client. Never put it into chat or tracked files. Never run Serve/Funnel reset or alter another service's route or port exposure. Use SETUP.md's Quirks table for setup failures.
 
 ## Day-to-day use
 
-Call `herdr_skill` once to read the installed CLI guide. Then use `herdr` with an `args` array:
+Call `herdr_skill` once to read the unified bridge guide. Then use `herdr` with an `args` array or a quoted `command` string:
 
 ```json
 {"args":["list"]}
@@ -19,23 +19,32 @@ Call `herdr_skill` once to read the installed CLI guide. Then use `herdr` with a
 {"args":["send","w1:p1","Review the current changes"]}
 {"args":["wait","w1:p1"]}
 {"args":["reply","w1:p1"]}
+{"args":["spawn","--name","review","--cwd","/absolute/project","--","pi"]}
+{"args":["get","core:t1"]}
+{"args":["close","core:t1"]}
 ```
 
-`list` includes all panes, including shells. Friendly commands resolve pane IDs, agent names, tab labels, workspace labels and terminal titles. Duplicate labels require an explicit pane ID. No input is sent when the target is ambiguous. Raw CLI commands retain their own target syntax and output.
+`list` merges local TUI panes and Core terminals. TUI IDs stay unchanged. Core IDs use `core:tN`. Friendly commands resolve IDs, agent names and unique reported labels across both runtimes. Duplicate labels require an explicit ID. If a runtime is offline, `list` reports it in `unavailable` and name resolution fails closed. Choose a known explicit ID on the available runtime. No input is sent on ambiguity. A known Core ID can address a retained finished terminal even after it leaves the live list.
 
-`send` prompts an agent or runs the text in an available shell pane. It acknowledges delivery, not that the turn started or finished. Do not resend merely because status has not changed. The bridge pins the session: machine discovery (`machine list`), machine routing and session switching are disabled. Do not use `--current` or `--session`. A payload consisting solely of a routing flag such as `--session=other` is rejected because Herdr would interpret it as routing rather than text.
+`spawn [--name NAME] [--cwd /absolute/path] -- <program> [arguments...]` prefers Core whenever its binary is installed, even if its backend is unavailable. Failed Core spawns never create a TUI pane instead. Without Core, spawn supports TUI agent executables such as `pi`, `claude` and `codex`, not arbitrary programs. Names accept 1 to 32 lowercase letters, digits, underscores or hyphens. Spawn acknowledges launch, not task completion. Pass startup arguments to the program, then inspect readiness before sending input. Core template launches include `first_message.sent` when Core handles task delivery. If false, the program exists but its task was not delivered. `close` stops the selected target.
 
-Use `agent get <target>` for reported status. A list drawn inside a pane is just terminal content and may be stale or describe a different agent.
+Existing targets stay on their owning runtime. Raw TUI commands remain available when TUI is installed, with TUI syntax for commands outside the unified verbs. There is no raw Core CLI pass-through.
+
+`send` submits input to a Core program, prompts a TUI agent or runs the text in an available TUI shell pane. It acknowledges delivery, not that the turn started or finished. Do not resend merely because status has not changed. The bridge pins each local runtime. Machine discovery (`machine list`), machine routing and session switching through tool arguments are disabled. Core `hc ls` may contact configured remote machines, but remote rows are filtered out and the adapter cannot route mutations to them. Do not use `--current` or `--session`. On TUI, a payload consisting solely of a routing flag such as `--session=other` is rejected because Herdr would interpret it as routing rather than text.
+
+Use `get <target>` for reported status. An unknown status is not completion. The bridge does not infer agent state from terminal text. A list drawn inside a pane is just terminal content and may be stale or describe a different agent.
 
 ### Reading a working agent
 
 `read <target>` defaults to `recent-unwrapped`. Use `--source visible` for the current screen. Neither guarantees a full transcript; requesting more lines does not recover unavailable history.
 
-Terminal history capture can return `agent_not_idle` while an agent is working. Use `--source visible` to inspect the screen, or wait until idle and retry the history read. Requested history is never silently replaced with screen output.
+Core reads mark incomplete capture with `truncated: true` and report the capture method and any reason. They do not promise a full transcript.
+
+TUI terminal history capture can return `agent_not_idle` while an agent is working. Use `--source visible` to inspect the screen, or wait until idle and retry the history read. Requested history is never silently replaced with screen output.
 
 ### Clean Pi replies
 
-Use `reply <target>` for Pi's latest completed assistant text, without terminal wrapping or borders. The bridge follows the exact session path reported by Herdr and returns text blocks only, never reasoning or tool payloads. It does not search other sessions by working directory.
+Use `reply <target>` for Pi's latest completed assistant text, without terminal wrapping or borders. The bridge follows the exact reported session path and returns text blocks only, never reasoning or tool payloads. It does not search other sessions by working directory. Core requires `get` to report `status.app: pi` and `labels['pi.session_file']`. Our Pi integration supplies that label. It is not a Core guarantee for every Pi installation.
 
 The result identifies `message_id`, `agent_status` and `newer_activity`. It is the latest completed reply on the **last persisted branch**, not proof the current task has finished. Pi can switch its live branch before writing another record. Failed, aborted or still-working turns may leave an older completed reply as the latest available one.
 
@@ -45,7 +54,9 @@ Long replies are paged. When `next_offset` is not null, call `reply <target> --o
 
 If the client supports MCP 2026-07-28 subscriptions, subscribe to `herdr://panes` and re-read that resource on `notifications/resources/updated`. Read once after subscribing or reconnecting too. Updates cover names and reported state, not terminal transcripts or per-message completion. Only use push instead of waiting when the client actually delivers notifications to your workflow. See [push clients](docs/push.md). Otherwise use the wait loop below.
 
-The default wait ceiling is 90 seconds. An agent wait returns earlier on idle, done or blocked. A shell wait returns when its shell is the foreground process again. `wait <target> --match <text>` waits for terminal output on either kind of pane. The separate `herdr_skill` tool returns the installed Herdr guide unchanged.
+The default wait ceiling is 90 seconds. TUI agent waits return earlier on idle, done or blocked. A TUI shell wait returns when its shell is the foreground process again. Core waits use reported agent status when available. Without status, they wait for program exit, not an inferred idle state.
+
+`wait <target> --match <text>` waits for terminal output. Core watches only new output after the wait begins. TUI output waits can match existing output too. Regular expressions are TUI-only and are never translated into Core text matches.
 
 - On `ok`, inspect Herdr's returned state and read the output. Blocked means the agent needs attention, not that it finished.
 - On `wait_timeout` with `state: working`, the wait expired without a match. If looking for a reply, read with `--source visible`: an answer may already be on screen while the agent continues working. If the result is still needed, continue the wait loop with the same target, condition and timeout rather than resending the task.
@@ -56,7 +67,7 @@ The default wait ceiling is 90 seconds. An agent wait returns earlier on idle, d
 
 The client must allow a request to last longer than the wait budget, including up to four seconds for cleanup and the state check. [Client timeout guidance](docs/clients.md#verify-discovery-and-long-waits) explains the 15-second protocol keepalives and the SDK's shorter default. Keepalives do not add model turns or extend hard client deadlines. If a gateway cuts off longer waits but accepts 25 seconds, use `wait <target> --timeout 25000` on every iteration. This needs no service restart and does not change other clients' budgets. An approved deployment change can instead lower `HERDR_MCP_WAIT_MAX` for all clients of that bridge.
 
-Waits track state, not individual message turns. `pane wait-output` searches existing output too. Neither proves that the most recent prompt has completed.
+Waits track reported state or process exit, not individual message turns. An output match does not prove that the most recent prompt has completed.
 
 ## Status and recovery
 
@@ -64,6 +75,9 @@ Waits track state, not individual message turns. `pane wait-output` searches exi
 
 | Code | What to do next | Ask the user? |
 |---|---|---|
+| `runtime_unavailable` | Check the reported backend and its pinned settings. Use an explicit known ID on the available backend, not a name. Never retry a mutation on the other runtime. | If configuration or service intervention is needed |
+| `target_blocked` | Inspect the target and resolve the reported block before sending more input. | If intervention is needed |
+| `target_finished` | Read the final output. Do not send to an exited program. | If new work is needed |
 | `herdr_not_running` | Start Herdr or check the bridge's pinned socket. A dead socket does not prove the session was deleted. | Yes |
 | `session_missing` | Restore the intended session or correct the configured socket. Used only when Herdr explicitly reports a missing session. | Yes |
 | `pane_not_found` | Refresh `list` or `pane list` and choose the intended current ID. | If the target is absent or ambiguous |
@@ -74,7 +88,7 @@ Waits track state, not individual message turns. `pane wait-output` searches exi
 | `bad_token` | Copy the existing token into the client's bearer header. Do not rotate it automatically. | Yes, private client entry only |
 | `wait_timeout` | Check state; read visible output if looking for a reply, even while working. Repeat the wait if the result is still needed. | Only for a blocker or overall deadline |
 | `timeout` | Read before retrying input. The command may already have taken effect. | If its outcome remains unclear |
-| `truncated` | Use fewer `--lines` or a narrower source. For an oversized skill, use subcommand `--help`. Never resend input to recover output. | Usually no |
+| `truncated` | Use fewer `--lines` or a narrower source. For raw TUI command syntax, use subcommand `--help`. Never resend input to recover output. | Usually no |
 | `invalid_arguments` | Follow `next`, or read the guide and subcommand `--help`, then correct the call. | Usually no |
 | `busy` | Wait for an active call to finish, then retry. No command started. | No |
 | `cancelled` | Inspect before retrying. Cancellation is not rollback. | If mutation outcome is unclear |

@@ -12,15 +12,15 @@ const inputSchemas = Object.fromEntries(Object.entries(schemas).map(([name, sche
   [name, z.toJSONSchema(schema, { io: 'input', target: 'draft-2020-12' })]));
 
 export function createMcpServer({ runner, updates, waitMaxMs, era }) {
-  const server = new Server({ name: 'herdr-mcp', version: '0.2.1' }, {
+  const server = new Server({ name: 'herdr-mcp', version: '0.3.0' }, {
     supportedProtocolVersions: ['2026-07-28', '2025-06-18', '2025-03-26'],
     capabilities: { tools: { listChanged: false }, resources: { listChanged: false, subscribe: era === 'modern' } },
   });
   server.setRequestHandler('tools/list', () => ({ tools: [
-    { name: 'herdr_skill', description: 'Read the installed Herdr CLI guide verbatim', inputSchema: inputSchemas.herdr_skill },
+    { name: 'herdr_skill', description: 'Read the terminal and agent control guide', inputSchema: inputSchemas.herdr_skill },
     {
       name: 'herdr', inputSchema: inputSchemas.herdr,
-      description: `Control the pinned Herdr server. list; send <target> <text>; read <target>; reply <target> for clean Pi text; wait <target> [--timeout ms]. Targets accept pane IDs, agent names and unique labels. Calls block; wait ceiling ${waitMaxMs} ms. Sending confirms delivery, not completion. Read herdr_skill for full CLI syntax.`,
+      description: `Control local terminals and agents: list, spawn, get, read, send, wait, reply, close. Targets accept pane IDs, names and unique labels. Wait ceiling ${waitMaxMs} ms. Sending confirms delivery, not completion. Read herdr_skill for syntax.`,
     },
   ] }));
 

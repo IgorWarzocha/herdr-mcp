@@ -1,10 +1,10 @@
 # Setup reference
 
-Follow [SETUP.md](../SETUP.md) for the ordered setup and verification flow. These recipes run on the machine hosting Herdr. Inspect existing services before changing them.
+Follow [SETUP.md](../SETUP.md) for the ordered setup and verification flow. These recipes run on the machine hosting Herdr TUI, Core or both. Inspect existing services before changing them.
 
 ## Native Windows foreground setup
 
-Install current Node at least 26.12.1, Pi and [Herdr for Windows](https://herdr.dev/docs/windows-beta/), at least 0.9.5. Open Herdr so its server is running, then in PowerShell:
+Install Node at least 26.12.1 and at least one native runtime: [Herdr TUI for Windows](https://herdr.dev/docs/windows-beta/) 0.9.5+ or Core `hc` 0.1.14+. If using TUI, install Pi for its deployment smoke and open Herdr so its server is running. Then in PowerShell:
 
 ```powershell
 git clone https://github.com/IgorWarzocha/herdr-mcp "$HOME/herdr-mcp"
@@ -16,11 +16,11 @@ npm run check:live
 npm start
 ```
 
-Use a native `herdr.exe`, not a `.cmd` or `.bat` wrapper. Stop with Ctrl+C. The background recipes below include WSL2 for Windows. No native Windows service wrapper is shipped.
+Use native executables such as `herdr.exe` and `hc.exe`, not `.cmd` or `.bat` wrappers. Core is auto-detected on PATH. Configure a different executable, socket or session with `HERDR_MCP_CORE_BINARY`, `HERDR_MCP_CORE_SOCKET` and `HERDR_MCP_CORE_SESSION`. The Core session defaults to `default`. Stop with Ctrl+C. The background recipes below include WSL2 for Windows. No native Windows service wrapper is shipped.
 
 ## Keep the bridge running
 
-These recipes supervise the bridge, not Herdr or your tunnel. Those must also be running. Run `npm run check:live` before stopping or restarting a bridge. The installed Herdr and Pi smoke must pass. Use the service's binary and PATH settings for the check. Stop a foreground `npm start` before starting a service on the same port.
+These recipes supervise the bridge, not runtime servers or your tunnel. Run `npm run check:live` before stopping or restarting a bridge. Each installed runtime must pass its disposable smoke. TUI uses installed Pi, while Core uses a Node fixture. Neither makes model calls. Use the service's runtime binaries, PATH and settings for the check. Stop a foreground `npm start` before starting a service on the same port.
 
 ### Linux: systemd user service
 
@@ -30,7 +30,7 @@ mkdir -p ~/.config/herdr-mcp ~/.config/systemd/user
 [ -f ~/.config/systemd/user/herdr-mcp.service ] || cp systemd/herdr-mcp.service ~/.config/systemd/user/
 ```
 
-Edit `service.env`: put absolute directories for current Herdr and Node first in `PATH`. Set a custom token or socket path if needed. Edit `WorkingDirectory` in the copied unit if the repository is not `~/herdr-mcp`. Do not overwrite an existing service without reviewing it.
+Edit `service.env`: put absolute directories for current runtime binaries and Node first in `PATH`. Set custom token, socket and Core session settings if needed. The three `HERDR_MCP_CORE_*` settings are shown in [.env.example](../.env.example). Edit `WorkingDirectory` in the copied unit if the repository is not `~/herdr-mcp`. Do not overwrite an existing service without reviewing it.
 
 ```sh
 systemctl --user daemon-reload
@@ -48,10 +48,11 @@ systemd does **not** read your shell rc, so mise/nvm/asdf shims aren't on PATH. 
 mkdir -p ~/Library/LaunchAgents ~/Library/Logs
 [ -f ~/Library/LaunchAgents/dev.herdr-mcp.plist ] || cp launchd/dev.herdr-mcp.plist ~/Library/LaunchAgents/
 command -v node
-command -v herdr
+command -v herdr   # if using TUI
+command -v hc      # if using Core
 ```
 
-Edit the copied [plist](../launchd/dev.herdr-mcp.plist). Replace every `/Users/YOU`, set the actual Node executable in `ProgramArguments`, and set the repository, token, socket and log paths. Adjust `PATH` to include Herdr's directory. `/opt/homebrew/bin/node` is only an example. For mise, nvm or asdf, resolve the real executable rather than a shim. The macOS default socket is `~/.config/herdr/herdr.sock`, unless you changed `XDG_CONFIG_HOME` or selected another session.
+Edit the copied [plist](../launchd/dev.herdr-mcp.plist). Replace every `/Users/YOU`, set the actual Node executable in `ProgramArguments`, and set the repository, token, socket and log paths. Adjust `PATH` to include each installed runtime's directory. Add `HERDR_MCP_CORE_BINARY`, `HERDR_MCP_CORE_SOCKET` or `HERDR_MCP_CORE_SESSION` to `EnvironmentVariables` if needed. Core otherwise uses `hc` and session `default`. `/opt/homebrew/bin/node` is only an example. For mise, nvm or asdf, resolve the real executable rather than a shim. The macOS default socket is `~/.config/herdr/herdr.sock`, unless you changed `XDG_CONFIG_HOME` or selected another session.
 
 launchd does not expand `~` or `$HOME`, read your shell rc, or load `service.env`. Put settings in `EnvironmentVariables` with literal absolute paths. XML-escape `&` as `&amp;` in paths.
 
@@ -68,7 +69,7 @@ This LaunchAgent starts at login and restarts the bridge if it exits. It does no
 
 ### Windows: WSL2 with systemd
 
-Install a WSL2 distribution such as Ubuntu. In PowerShell, `wsl --list --verbose` must show version `2`. Install Linux Node and Herdr **inside that distribution**, with the repository in its Linux home directory. Use its Bash terminal for the install and Linux systemd steps above.
+Install a WSL2 distribution such as Ubuntu. In PowerShell, `wsl --list --verbose` must show version `2`. Install Linux Node and your chosen TUI or Core runtime **inside that distribution**, with the repository in its Linux home directory. Use its Bash terminal for the install and Linux systemd steps above.
 
 Recent Ubuntu WSL installations enable systemd by default. Check inside WSL:
 

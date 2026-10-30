@@ -40,6 +40,7 @@ export function projectDirectory(snapshot) {
 }
 
 export async function readDirectory(runner, signal) {
+  if (runner.directory) return runner.directory(signal);
   let result;
   try { result = commandResult(await runner.run(['api', 'snapshot'], signal)); }
   catch (error) { return exceptionResult(error); }

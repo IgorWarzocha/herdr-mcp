@@ -1,12 +1,12 @@
 # herdr-mcp
 
-Let an AI agent read and send messages to [Herdr](https://github.com/herdrdev/herdr) terminal panes on your own machine.
+Let an AI agent control [Herdr TUI](https://github.com/herdrdev/herdr) panes and [Herdr Core](https://github.com/herdrdev/herdr-core) terminals on your own machine.
 
-herdr-mcp connects MCP clients to a running Herdr session. Ask your agent to list your panes, check their output, send a task or wait for a status change. You can follow work from a remote client without sitting at the terminal. MCP clients using 2025-03-26 or 2025-06-18 negotiate their version at initialization. Clients using 2026-07-28 can also receive push updates.
+herdr-mcp connects MCP clients to both runtimes at once, or either one on its own. Ask your agent to list terminals, check output, send a task or launch a program. New programs prefer Core when `hc` is installed. Existing targets stay on their owning runtime, and failed commands never fall back to the other runtime. You can follow work from a remote client without sitting at the terminal. MCP clients using 2025-03-26 or 2025-06-18 negotiate their version at initialization. Clients using 2026-07-28 can also receive push updates.
 
-It is for people who already use Herdr and want to give an agent remote access. Your Herdr machine must stay awake and connected.
+It is for people who use Herdr TUI or Core and want to give an agent remote access. Your machine must stay awake and connected.
 
-`list` shows every pane with its workspace label, tab label, agent name and terminal title. Friendly commands accept pane IDs, agent names and unique labels. `send` submits a prompt to an agent or runs a command in an available shell pane. `read` returns unwrapped terminal text by default. `reply` reads Pi's latest completed reply from its reported session file, without terminal borders or screen-width wrapping.
+`list` merges local targets from both runtimes, with their reported labels and state. TUI pane IDs stay unchanged. Core terminal IDs look like `core:t1`. Friendly commands accept pane IDs, agent names and unique labels. `send` submits input to a Core program, prompts a TUI agent or runs a command in an available TUI shell pane. `spawn --name review --cwd /absolute/project -- pi` starts a program without choosing a runtime. `read` returns unwrapped terminal text by default. `reply` reads Pi's latest completed reply from its reported session file, without terminal borders or screen-width wrapping.
 
 Clients using MCP 2026-07-28 can subscribe to pane-directory changes instead of repeatedly calling a tool to check status. The bridge uses the official SDK v2 and includes a [receiving client](docs/push.md). Receiving an update does not by itself start a model turn in Grok Bot or Cursor. The 2025 clients retain tools, resource reads and blocking waits without needing a persistent listener.
 
@@ -20,9 +20,9 @@ The wait limit is configurable for local clients or others that tolerate longer 
 
 ## What you need
 
-- **Current stable Herdr**, with its server running. This version targets 0.9.5 or newer.
+- **Herdr TUI 0.9.5+ or Herdr Core (`hc`) 0.1.14+, or both**, in the bridge's OS environment. TUI needs its server running. Core is detected on the service PATH.
 - **Current Node.js**, at least 26.12.1, on the same machine.
-- **Pi on PATH** for the deployment smoke test. It uses a disposable saved conversation and makes no model calls.
+- **Pi on PATH when TUI is installed**, for the deployment smoke test. The Core check uses a Node fixture. Neither makes model calls.
 - **Linux, macOS or Windows.** Background setup uses systemd on Linux, launchd on macOS, or WSL2 with systemd on Windows. Native Windows can run the bridge in the foreground.
 - **An MCP client that supports 2025-03-26, 2025-06-18 or 2026-07-28 over Streamable HTTP and a custom bearer-token header.** OAuth-only clients are not supported.
 - **A connection route:**
@@ -55,7 +55,7 @@ Once connected, ask:
 
 > Read herdr_skill, then list my panes.
 
-Sending a message confirms delivery, not that the agent has finished. Ask it to read the response afterwards. Waiting tracks agent state rather than a particular message.
+Sending a message confirms delivery, not that the agent has finished. Ask it to read the response afterwards. Waiting tracks reported state rather than a particular message. A Core program without reported agent status waits for process exit instead. Output matches on Core watch only new output after the wait begins.
 
 For manual setup or troubleshooting, see the [setup walkthrough](SETUP.md), [platform recipes](docs/setup.md) and [usage and error guide](SKILL.md).
 

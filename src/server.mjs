@@ -5,6 +5,7 @@ import { isAbsolute, posix, win32 } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createRunner, DEFAULT_WAIT_MAX_MS } from './bridge.mjs';
 import { createHandler } from './http.mjs';
+import { createRuntimes } from './runtimes.mjs';
 
 export function checkHerdrVersion(text) {
   const match = /^herdr (\d+)\.(\d+)\.(\d+)(?:\s|$)/.exec(text.trim());
@@ -32,12 +33,61 @@ export function config(env = process.env, platform = process.platform) {
     // Herdr uses this path as a named-pipe identifier on Windows, not a Unix socket.
     socket: env.HERDR_MCP_SOCKET ?? env.HERDR_SOCKET_PATH ?? join(xdg, 'herdr', 'herdr.sock'),
     binary: env.HERDR_MCP_BINARY ?? 'herdr',
+    coreBinary: env.HERDR_MCP_CORE_BINARY ?? 'hc',
+    coreRequired: env.HERDR_MCP_CORE_BINARY !== undefined,
+    tuiRequired: env.HERDR_MCP_BINARY !== undefined,
+    coreSocket: env.HERDR_MCP_CORE_SOCKET,
+    coreSession: env.HERDR_MCP_CORE_SESSION ?? 'default',
+    configHome: env.XDG_CONFIG_HOME,
+    stateHome: env.XDG_STATE_HOME,
+    runtimeDir: env.XDG_RUNTIME_DIR,
     host: env.HERDR_MCP_HOST ?? '127.0.0.1',
     port: Number(env.PORT ?? env.HERDR_MCP_PORT ?? 8792),
     path: env.PATH ?? (win ? (env.Path ?? '') : '/usr/local/bin:/usr/bin:/bin'),
     origins: (env.HERDR_MCP_ORIGINS ?? '').split(',').map(s => s.trim()).filter(Boolean),
     waitMaxMs,
   };
+}
+
+export function checkCoreVersion(text) {
+  const match = /^hc (\d+)\.(\d+)\.(\d+)(?:\s|$)/.exec(text.trim());
+  if (!match || (Number(match[1]) === 0 && (Number(match[2]) < 1 ||
+      (Number(match[2]) === 1 && Number(match[3]) < 14)))) {
+    throw new Error('Current herdr-core is required (hc 0.1.14 or newer). Check HERDR_MCP_CORE_BINARY and PATH.');
+  }
+  return text.trim();
+}
+
+// Version probes do not start a server. Missing default binaries are optional;
+// explicitly configured, broken or unsupported installations are errors.
+export async function installedRuntimes(cfg) {
+  const runners = {};
+  const budget = { active: 0 };
+  try {
+    for (const [name, binary, required, check] of [
+      ['tui', cfg.binary, cfg.tuiRequired, checkHerdrVersion],
+      ['core', cfg.coreBinary, cfg.coreRequired, checkCoreVersion],
+    ]) {
+      const runner = createRunner({ ...cfg, binary, runtime: name, budget });
+      let version;
+      try { version = await runner.run(['--version'], undefined, { timeoutMs: 5000 }); }
+      catch (error) {
+        runner.stop();
+        if (error.code === 'ENOENT' && !required) continue;
+        throw new Error(`Could not start the configured ${name} executable.`);
+      }
+      if (version.exit_code !== 0 || version.timed_out || version.truncated) {
+        runner.stop(); throw new Error(`Could not verify the installed ${name} version.`);
+      }
+      try { check(version.stdout); } catch (error) { runner.stop(); throw error; }
+      runners[name] = runner;
+    }
+    if (!runners.tui && !runners.core) throw new Error('Install Herdr TUI or herdr-core, then run doctor.');
+    return createRuntimes(runners);
+  } catch (error) {
+    for (const runner of Object.values(runners)) runner.stop();
+    throw error;
+  }
 }
 
 export async function readToken(tokenFile, platform = process.platform, uid = process.getuid?.()) {
@@ -51,13 +101,12 @@ export async function readToken(tokenFile, platform = process.platform, uid = pr
 }
 
 export async function main() {
-  const { home, tokenFile, socket, binary, host, port, path, origins, waitMaxMs } = config();
+  const cfg = config();
+  const { tokenFile, socket, host, port, origins, waitMaxMs } = cfg;
   if (!isAbsolute(socket)) throw new Error('HERDR_MCP_SOCKET must be an absolute path');
+  if (cfg.coreSocket && !isAbsolute(cfg.coreSocket)) throw new Error('HERDR_MCP_CORE_SOCKET must be an absolute path');
   const token = await readToken(tokenFile);
-  const runner = createRunner({ binary, socket, home, path });
-  const version = await runner.run(['--version']);
-  if (version.exit_code !== 0 || version.timed_out || version.truncated) throw new Error('Could not verify the installed Herdr version.');
-  checkHerdrVersion(version.stdout);
+  const runner = await installedRuntimes(cfg);
   const handler = createHandler({ token, runner, origins, waitMaxMs });
   const http = createServer(handler);
   http.requestTimeout = 15000;

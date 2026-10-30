@@ -106,7 +106,6 @@ function replyOptions(options) {
 }
 
 export async function readReply(runner, pane, options, signal) {
-  const { offset, limit, messageId } = replyOptions(options);
   if (pane.agent !== 'pi') throw unavailable('Clean replies are available for Pi panes.');
   const response = commandResult(await runner.run(['agent', 'get', pane.pane_id], signal));
   if (response.code !== 'ok') return response;
@@ -117,14 +116,24 @@ export async function readReply(runner, pane, options, signal) {
       typeof session.value !== 'string' || !isAbsolute(session.value) || extname(session.value) !== '.jsonl') {
     throw unavailable('Herdr has not reported a Pi session path for this pane. No session was guessed from its working directory.');
   }
-  const reply = await latestReply(session.value, signal);
+  return readSessionReply(session.value, pane, options, signal, agent.agent_status);
+}
+
+// Both runtimes must report an exact current session path. Never discover one
+// by scanning a working directory or choosing the newest conversation file.
+export async function readSessionReply(path, pane, options, signal, status) {
+  const { offset, limit, messageId } = replyOptions(options);
+  if (typeof path !== 'string' || !isAbsolute(path) || extname(path) !== '.jsonl') {
+    throw unavailable('The target has not reported an absolute Pi session file path. Read the terminal instead.');
+  }
+  const reply = await latestReply(path, signal);
   if (messageId && messageId !== reply.message_id) throw unavailable('The latest reply changed. Read again from offset 0.');
   const characters = Array.from(reply.text);
   if (offset > characters.length) throw new BridgeError('invalid_arguments', 'The offset is past the end of this reply. Read again from offset 0.');
   const next = Math.min(offset + limit, characters.length);
   return {
     code: 'ok', exit_code: 0, stdout: characters.slice(offset, next).join(''), stderr: '',
-    pane_id: pane.pane_id, source: 'pi_session', branch: 'last_persisted', agent_status: agent.agent_status,
+    pane_id: pane.pane_id, source: 'pi_session', branch: 'last_persisted', agent_status: status,
     message_id: reply.message_id, timestamp: reply.timestamp, newer_activity: reply.newer_activity,
     offset, next_offset: next < characters.length ? next : null, total_characters: characters.length,
     truncated: next < characters.length,
