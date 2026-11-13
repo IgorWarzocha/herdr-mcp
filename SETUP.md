@@ -7,7 +7,7 @@ Do the steps in order on the machine that runs Herdr. Inspect an existing instal
 Hard rules:
 - Never run `tailscale serve reset` or `tailscale funnel reset`, and never `funnel off` a path you didn't create. Other services share the node.
 - Never print the token into chat or commit it. Refer to its path, and only reveal it when the user asks to paste it into a client.
-- Don't modify existing Funnel/Serve handlers. Only add `/herdr-mcp`.
+- Don't modify existing Funnel/Serve handlers. Add only this bridge's `/herdr-mcp` path and, when enabling OAuth, its exact `/.well-known/oauth-authorization-server/herdr-mcp` metadata path. Reuse an existing handler only after verifying its target and exposure match.
 - Funnel exposure is per port, not per path. Never change a shared port from private Serve to public Funnel or the reverse. If the selected mode conflicts with existing handlers, stop and offer a separate node or Cloudflare hostname.
 - Keep each runtime and the bridge in the same OS environment and user context. Herdr supports Linux, macOS and native Windows. WSL2 is the documented Windows background-service route, not a requirement of Herdr.
 
@@ -21,7 +21,7 @@ Inspect the OS, installed Node, Herdr TUI and Core versions, running services an
 | Cloudflare Tunnel | Cloudflare login, a domain on Cloudflare, `cloudflared` | Public HTTPS for hosted clients |
 | Tailscale-only Serve | Tailscale on both server and the actual MCP client, HTTPS, tailnet access policy | Private, not for a hosted backend unless that backend joins the tailnet |
 
-Do not require Tailscale for the Cloudflare route. A user's browser or laptop being on the tailnet is not enough for Grok Bot or Cursor cloud agents. **HUMAN:** choose the route and client, accept the access risk and approve installation of missing prerequisites. Identify account logins, domain ownership and administrator approvals they will need. Do not proceed with exposure until they choose.
+Do not require Tailscale for the Cloudflare route. A user's browser or laptop being on the tailnet is not enough for ChatGPT, Grok Bot or Cursor cloud agents. **HUMAN:** choose the route and client, accept the access risk and approve installation of missing prerequisites. Identify account logins, domain ownership and administrator approvals they will need. Do not proceed with exposure until they choose.
 
 Run the commands in **Bash** on Linux, macOS or inside WSL2. They are not PowerShell snippets. For native Windows foreground use, follow [the PowerShell recipe](docs/setup.md#native-windows-foreground-setup) and translate the checks into PowerShell with the same settings. Use NTFS ACLs instead of `chmod`. Set these variables once and keep them for every step:
 ```sh
@@ -111,12 +111,12 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST "$URL"                         
 ```
 Verify public routes from outside the tailnet, or private Serve from the actual authorised tailnet client. A successful local request alone is not remote verification. If access hangs, investigate client DNS, proxy and access policy before changing the server (Q11).
 
-## 5. Connect clients (HUMAN pastes the token)
+## 5. Connect clients
 For ChatGPT or another OAuth client, follow [OAuth setup](docs/oauth.md) instead of pasting the bridge token. Existing bearer clients need no changes.
 
 For bearer clients, render the selected [connector template](docs/clients.md) with the actual verified URL, not `$URL` or an example hostname. Give the user the exact token file path separately. Leave only the secret for **HUMAN** to paste directly into the client's protected field or environment. Do not put it into chat or tracked configuration. The bridge uses Streamable HTTP, not legacy SSE.
 
-**verify:** the client negotiates a supported MCP revision and discovers `herdr_skill` and `herdr`. If it cannot use a supported revision or send a custom Authorization header, stop and report the incompatibility. Do not remove authentication to make it work.
+**verify:** the client negotiates a supported MCP revision, authenticates through the selected bearer or OAuth flow, and discovers `herdr_skill` and `herdr`. A custom header is not required for OAuth clients. If neither authentication method is compatible, stop and report it. Do not remove authentication to make it work.
 
 ## 6. End-to-end test
 Use `$URL` from step 4 (or `URL=http://127.0.0.1:$PORT/mcp` for a local-only/trial run).

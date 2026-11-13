@@ -1,65 +1,55 @@
 # herdr-mcp
 
-Let an AI agent control [Herdr TUI](https://github.com/herdrdev/herdr) panes and [Herdr Core](https://github.com/herdrdev/herdr-core) terminals across your configured machines.
+Let ChatGPT, Grok Bot or another compatible assistant work with agents running on your own always-on machines.
 
-herdr-mcp connects MCP clients to both runtimes at once, or either one on its own. Ask your agent to list terminals, check output, send a task or launch a program. New programs prefer Core when `hc` is installed. Existing targets stay on their owning runtime, and failed commands never fall back to the other runtime. You can follow work from a remote client without sitting at the terminal. MCP clients using 2025-03-26 or 2025-06-18 negotiate their version at initialization. Clients using 2026-07-28 can also receive push updates.
+herdr-mcp connects your AI client to [Herdr Core](https://github.com/herdrdev/herdr-core), [Herdr TUI](https://github.com/herdrdev/herdr), or both. From a chat, you can:
 
-It is for people who use Herdr TUI or Core and want to give an agent remote access. Your machine must stay awake and connected.
+- Find your running agents and see what they are doing.
+- Send a task, wait for it and read the result.
+- Start a new program on a chosen machine.
+- Read completed Pi replies without terminal borders or wrapped lines.
 
-`list` merges local TUI panes and local and remote Core terminals, with their reported labels, state and machine catalogue. TUI pane IDs stay unchanged. Local Core IDs look like `core:t1`; remote IDs include the permanent machine ID. Names and new programs are local unless you prefix the command with `--machine <name-or-ID>`, for example `--machine desktop send reviewer "Review the changes"` or `--machine laptop spawn -- pi`. The bridge uses the same Core machine catalogue as Shepherdr, configured with `hc machine add` on the bridge host. It needs no separate MCP endpoint on each machine.
+One MCP connection can reach the remote machines already configured in Core, using the same machine catalogue as Shepherdr. You do not need a separate MCP endpoint on every machine. Your machines must stay awake and connected.
 
-`send` submits input to a Core program, prompts a TUI agent or runs a command in an available TUI shell pane. `spawn --name review --cwd /absolute/project -- pi` starts a local program without choosing a runtime. `read` returns unwrapped terminal text by default. `reply` reads Pi's latest completed reply from its reported session file, without terminal borders or screen-width wrapping. Remote replies run the same bounded reader on the owning machine and require Node.js there.
+## Have your agent set it up
 
-Clients using MCP 2026-07-28 can subscribe to pane-directory changes instead of repeatedly calling a tool to check status. The bridge uses the official SDK v2 and includes a [receiving client](docs/push.md). Receiving an update does not by itself start a model turn in Grok Bot or Cursor. The 2025 clients retain tools, resource reads and blocking waits without needing a persistent listener.
+**This gives the connected client shell-equivalent access, including Core's configured remote machines.** It can launch programs and submit commands. This is not a sandbox. Only connect clients you trust, and consider a dedicated runtime session or OS account for separation.
 
-## SSH vs MCP
+Give an agent with terminal or SSH access to the machine hosting Herdr this prompt:
 
-If you want to keep chatting with an agent while it works, SSH into the machine and use Herdr directly. If you want a remote agent to wait for a result before continuing its own task, use the MCP connection.
+> Read https://github.com/IgorWarzocha/herdr-mcp/blob/main/SETUP.md and set up herdr-mcp for me. Inspect my environment first, explain the requirements and access risk, and help me choose a compatible client and connection route. Install and configure it, preserve existing services, and verify the selected client can list my agents and read output. Stop for account logins or administrator approvals. Keep credentials out of chat and tracked files.
 
-Coding tasks take minutes, not seconds. Each MCP wait lasts up to 90 seconds by default. If it returns `wait_timeout`, read the screen when looking for a reply: an answer can be visible while the agent is still working. If you still need the result, repeat the wait with the same timeout until it is ready or your overall deadline is reached. Otherwise, carry on with other work and check back later.
+Your agent handles installation, the background service, connection settings and checks. You handle account logins, administrator approvals and the decision to grant access. You do not need to write code.
 
-The wait limit is configurable for local clients or others that tolerate longer calls. Hosted clients can impose their own shorter deadline. See [client timeout settings](docs/clients.md#verify-discovery-and-long-waits).
+For **ChatGPT**, the agent configures OAuth and approves the connection from the bridge host. Your bridge credential never goes into ChatGPT or its browser form. Access tokens refresh automatically; reapproval is needed after 30 days without a refresh, or after revocation. See [ChatGPT setup](docs/oauth.md).
+
+For **Grok Bot and other bearer-token clients**, put the existing token directly into the client's protected credential field. Never paste it into a chat. [Client instructions](docs/clients.md) cover ChatGPT, Grok Bot and Cursor. Other clients need compatible remote MCP and authentication support.
 
 ## What you need
 
-- **Herdr TUI 0.9.5+ or Herdr Core (`hc`) 0.1.14+, or both**, in the bridge's OS environment. TUI needs its server running. Core is detected on the service PATH.
-- **Current Node.js**, at least 26.12.1, on the same machine.
-- **Pi on PATH when TUI is installed**, for the deployment smoke test. The Core check uses a Node fixture. Neither makes model calls.
-- **Linux, macOS or Windows.** Background setup uses systemd on Linux, launchd on macOS, or WSL2 with systemd on Windows. Native Windows can run the bridge in the foreground.
-- **An MCP client that supports 2025-03-26, 2025-06-18 or 2026-07-28 over Streamable HTTP.** Use a custom bearer-token header, or enable [OAuth for ChatGPT](docs/oauth.md). Existing bearer clients need no changes.
-- **A connection route:**
-  - **Tailscale Funnel:** a public HTTPS address without buying a domain. Requires a Tailscale account and permission to enable HTTPS and Funnel.
-  - **Cloudflare Tunnel:** a public HTTPS address on a domain you manage through Cloudflare.
-  - **Tailscale-only:** private access when the MCP client itself is on your tailnet. Having Tailscale on your laptop does not put a hosted agent's backend on it.
+- **A Linux, macOS or Windows machine** with Herdr Core 0.1.14+ or Herdr TUI 0.9.5+, and Node.js 26.12.1+. TUI also needs Pi available for the deployment check. Your setup agent checks these prerequisites before proceeding.
+- **A compatible MCP client** using Streamable HTTP with OAuth or a bearer header. ChatGPT and Grok Bot have been tested live.
+- **An HTTPS connection route.** Hosted clients such as ChatGPT and Grok Bot need a publicly reachable endpoint. Tailscale Funnel can provide one without buying a domain; Cloudflare Tunnel uses a domain you manage. Private Tailscale access works only when the actual MCP client is on your tailnet, not merely the laptop displaying its chat.
 
-The agent will help you choose. You do not need both tunnel providers.
+Background setup uses systemd on Linux, launchd on macOS, or WSL2 with systemd on Windows. Native Windows can run the bridge in the foreground. Your agent can help choose the route and install missing prerequisites with your approval.
 
-## Risks
+## Use it from a chat
 
-**The token gives shell-equivalent access as the user running Herdr, including Core's configured remote machines.** A connected agent can read what is on screen and type commands into panes. This is not a sandbox.
+Once connected, try:
 
-- A malicious prompt or document can steer an agent into using that access.
-- Terminal output may contain passwords, keys or private work.
-- Public tunnels make the endpoint reachable from the internet. The token protects access.
-- A hosted client stores or handles your token. You are trusting that provider too.
+> Read herdr_skill, then show my running agents.
 
-Use a dedicated Herdr session for remote agents. For stronger separation, use a separate OS account without access to sensitive files. Keep the token out of chat, screenshots and committed files. If it leaks, revoke and replace it, then update your clients. Disable this bridge's tunnel route when you no longer need it, without disturbing other services.
+Then ask it to send a task to a specific agent, check output, or start a program on a named machine. Names and new programs default to the local machine. Remote commands use `--machine <name-or-ID>`; the control guide explains the syntax.
 
-## Ask your agent to set it up
+Sending a task confirms delivery, not completion. Ask the client to wait and read the result. A wait can time out while the agent keeps working; that is not a reason to send the task again. Hosted clients may have shorter time limits than the bridge. See [wait behaviour](docs/clients.md#verify-discovery-and-long-waits).
 
-Give a coding agent with terminal access to your Herdr machine this prompt:
+Modern clients can receive [directory-change notifications](docs/push.md). These do not guarantee that a client wakes up or starts another model turn. ChatGPT's separate MCP Events webhook integration is not implemented here.
 
-> Read https://github.com/IgorWarzocha/herdr-mcp/blob/main/SETUP.md and follow its setup flow. Inspect my environment first, explain what I need, and ask which tunnel and MCP client I want. Set it up with a check after each step. Stop for human-only actions, preserve existing services, and give me the connector settings without putting the token in chat.
+## Manual setup and troubleshooting
 
-The agent handles installation, service configuration, the selected tunnel and connection checks. **You handle account logins, administrator approvals, accepting the access risk and pasting the token into your client.** It will tell you when one of those steps is needed.
+Follow [SETUP.md](SETUP.md) for the ordered setup, [platform recipes](docs/setup.md) for service commands, and [SKILL.md](SKILL.md) for control commands and recovery.
 
-Once connected, ask:
-
-> Read herdr_skill, then list my panes.
-
-Sending a message confirms delivery, not that the agent has finished. Ask it to read the response afterwards. Waiting tracks reported state rather than a particular message. A Core program without reported agent status waits for process exit instead. Output matches on Core watch only new output after the wait begins.
-
-For manual setup or troubleshooting, see the [setup walkthrough](SETUP.md), [platform recipes](docs/setup.md) and [usage and error guide](SKILL.md).
+Terminal output can contain private information, and malicious prompts can steer an agent into misusing its access. Keep credentials out of chat, screenshots and committed files. If a bearer token leaks, replace it and update its clients. OAuth connections can be revoked separately. Remove only this bridge's public route when you no longer need it, preserving other services.
 
 ## Licence
 
