@@ -26,7 +26,7 @@ The wait limit is configurable for local clients or others that tolerate longer 
 - **Current Node.js**, at least 26.12.1, on the same machine.
 - **Pi on PATH when TUI is installed**, for the deployment smoke test. The Core check uses a Node fixture. Neither makes model calls.
 - **Linux, macOS or Windows.** Background setup uses systemd on Linux, launchd on macOS, or WSL2 with systemd on Windows. Native Windows can run the bridge in the foreground.
-- **An MCP client that supports 2025-03-26, 2025-06-18 or 2026-07-28 over Streamable HTTP and a custom bearer-token header.** OAuth-only clients are not supported.
+- **An MCP client that supports 2025-03-26, 2025-06-18 or 2026-07-28 over Streamable HTTP.** Use a custom bearer-token header, or enable [OAuth for ChatGPT](docs/oauth.md). Existing bearer clients need no changes.
 - **A connection route:**
   - **Tailscale Funnel:** a public HTTPS address without buying a domain. Requires a Tailscale account and permission to enable HTTPS and Funnel.
   - **Cloudflare Tunnel:** a public HTTPS address on a domain you manage through Cloudflare.

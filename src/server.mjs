@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { createRunner, DEFAULT_WAIT_MAX_MS } from './bridge.mjs';
 import { createHandler } from './http.mjs';
 import { createRuntimes } from './runtimes.mjs';
+import { createOAuth } from './oauth.mjs';
 
 export function checkHerdrVersion(text) {
   const match = /^herdr (\d+)\.(\d+)\.(\d+)(?:\s|$)/.exec(text.trim());
@@ -45,6 +46,11 @@ export function config(env = process.env, platform = process.platform) {
     port: Number(env.PORT ?? env.HERDR_MCP_PORT ?? 8792),
     path: env.PATH ?? (win ? (env.Path ?? '') : '/usr/local/bin:/usr/bin:/bin'),
     origins: (env.HERDR_MCP_ORIGINS ?? '').split(',').map(s => s.trim()).filter(Boolean),
+    oauthResource: env.HERDR_MCP_PUBLIC_URL,
+    oauthStateFile: env.HERDR_MCP_OAUTH_STATE_FILE ?? join(xdg, 'herdr-mcp', 'oauth.json'),
+    oauthClientId: env.HERDR_MCP_OAUTH_CLIENT_ID ?? 'herdr-chatgpt',
+    oauthRedirectUris: (env.HERDR_MCP_OAUTH_REDIRECT_URIS ?? 'https://chatgpt.com/connector_platform_oauth_redirect').split(',').map(s => s.trim()).filter(Boolean),
+    protocolLog: env.HERDR_MCP_PROTOCOL_LOG === '1',
     waitMaxMs,
   };
 }
@@ -106,13 +112,15 @@ export async function main() {
   if (!isAbsolute(socket)) throw new Error('HERDR_MCP_SOCKET must be an absolute path');
   if (cfg.coreSocket && !isAbsolute(cfg.coreSocket)) throw new Error('HERDR_MCP_CORE_SOCKET must be an absolute path');
   const token = await readToken(tokenFile);
+  const oauth = cfg.oauthResource ? await createOAuth({ resource: cfg.oauthResource, stateFile: cfg.oauthStateFile,
+    clientId: cfg.oauthClientId, redirectUris: cfg.oauthRedirectUris }) : undefined;
   const runner = await installedRuntimes(cfg);
-  const handler = createHandler({ token, runner, origins, waitMaxMs });
+  const handler = createHandler({ token, runner, origins, waitMaxMs, oauth, protocolLog: cfg.protocolLog });
   const http = createServer(handler);
   http.requestTimeout = 15000;
   http.headersTimeout = 10000;
   http.maxConnections = 64;
-  http.listen(port, host, () => console.log(`herdr-mcp listening on http://${host}:${port}/mcp (bearer auth required)`));
+  http.listen(port, host, () => console.log(`herdr-mcp listening on http://${host}:${port}/mcp (${oauth ? 'OAuth or bearer' : 'bearer'} auth required)`));
   for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => {
     http.close();
     void handler.close().finally(() => { runner.stop(); http.closeAllConnections(); });

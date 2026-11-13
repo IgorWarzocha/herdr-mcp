@@ -112,7 +112,9 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST "$URL"                         
 Verify public routes from outside the tailnet, or private Serve from the actual authorised tailnet client. A successful local request alone is not remote verification. If access hangs, investigate client DNS, proxy and access policy before changing the server (Q11).
 
 ## 5. Connect clients (HUMAN pastes the token)
-Render the selected [connector template](docs/clients.md) with the actual verified URL, not `$URL` or an example hostname. Give the user the exact token file path separately. Leave only the secret for **HUMAN** to paste directly into the client's protected field or environment. Do not put it into chat or tracked configuration. Explain that the bridge uses Streamable HTTP with bearer headers, not OAuth or legacy SSE.
+For ChatGPT or another OAuth client, follow [OAuth setup](docs/oauth.md) instead of pasting the bridge token. Existing bearer clients need no changes.
+
+For bearer clients, render the selected [connector template](docs/clients.md) with the actual verified URL, not `$URL` or an example hostname. Give the user the exact token file path separately. Leave only the secret for **HUMAN** to paste directly into the client's protected field or environment. Do not put it into chat or tracked configuration. The bridge uses Streamable HTTP, not legacy SSE.
 
 **verify:** the client negotiates a supported MCP revision and discovers `herdr_skill` and `herdr`. If it cannot use a supported revision or send a custom Authorization header, stop and report the incompatibility. Do not remove authentication to make it work.
 

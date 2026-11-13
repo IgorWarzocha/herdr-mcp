@@ -7,7 +7,7 @@ import { failure } from './errors.mjs';
 import { createMcpServer } from './mcp.mjs';
 import { createPaneUpdates } from './pane-updates.mjs';
 
-export function createHandler({ token, runner, origins, waitMaxMs = DEFAULT_WAIT_MAX_MS, pollIntervalMs = 2000 }) {
+export function createHandler({ token, runner, origins, oauth, protocolLog = false, waitMaxMs = DEFAULT_WAIT_MAX_MS, pollIntervalMs = 2000 }) {
   const expected = Buffer.from(`Bearer ${token}`);
   const updates = createPaneUpdates({ runner, intervalMs: pollIntervalMs });
   const mcp = createMcpHandler(({ era }) => createMcpServer({ runner, updates, waitMaxMs, era }), {
@@ -15,27 +15,37 @@ export function createHandler({ token, runner, origins, waitMaxMs = DEFAULT_WAIT
     maxRequestBodySize: 131072, maxSubscriptions: 8, bus: updates.bus,
   });
   const serve = toNodeHandler(mcp, { maxRequestBodySize: 131072 });
-  let requests = 0, closed = false;
+  let requests = 0, oauthRequests = 0, closed = false;
 
   const handle = async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     const auth = Buffer.from(req.headers.authorization ?? '');
-    if (auth.length !== expected.length || !timingSafeEqual(auth, expected)) {
-      res.writeHead(401, { 'WWW-Authenticate': 'Bearer', 'Content-Type': 'application/json' }).end(JSON.stringify(failure('bad_token'))); return;
+    const legacy = auth.length === expected.length && timingSafeEqual(auth, expected);
+    const oauthRoute = oauth?.matches(req.url);
+    const publicOAuth = oauthRoute && !legacy;
+    if (!oauthRoute && !legacy && !(req.auth = await oauth?.authenticate(req.headers.authorization))) {
+      res.writeHead(401, { 'WWW-Authenticate': oauth?.challenge ?? 'Bearer', 'Content-Type': 'application/json' }).end(JSON.stringify(failure('bad_token'))); return;
     }
-    if (req.headers.origin && !origins.includes(req.headers.origin)) {
-      res.writeHead(403).end('Origin not allowed'); return;
-    }
-    if (req.url !== '/mcp') { res.writeHead(404).end(); return; }
-    if (req.method !== 'POST') { res.writeHead(405, { Allow: 'POST' }).end(); return; }
-    if (closed || requests >= 16) { res.writeHead(503, { 'Content-Type': 'application/json' }).end(JSON.stringify(failure('busy'))); return; }
-    if (!isJsonContentType(req.headers['content-type'])) { res.writeHead(415).end('Expected application/json'); return; }
-    requests++;
+    // Anonymous OAuth work has its own small lane. Slow token bodies cannot
+    // consume MCP capacity or block an authenticated operator's approval.
+    if (closed || (publicOAuth ? oauthRequests >= 4 : requests >= 16)) { res.writeHead(503, { 'Content-Type': 'application/json' }).end(JSON.stringify(failure('busy'))); return; }
+    if (publicOAuth) oauthRequests++;
+    else requests++;
     let released = false;
-    const release = () => { if (!released) { released = true; requests--; } };
+    const release = () => {
+      if (!released) { released = true; if (publicOAuth) oauthRequests--; else requests--; }
+    };
     res.once('close', release);
-    const bodyTimer = setTimeout(() => req.destroy(), 10000);
+    let bodyTimer;
     try {
+      if (oauthRoute) { await oauth.handle(req, res, legacy); return; }
+      if (req.headers.origin && !origins.includes(req.headers.origin)) {
+        res.writeHead(403).end('Origin not allowed'); return;
+      }
+      if (req.url !== '/mcp') { res.writeHead(404).end(); return; }
+      if (req.method !== 'POST') { res.writeHead(405, { Allow: 'POST' }).end(); return; }
+      if (!isJsonContentType(req.headers['content-type'])) { res.writeHead(415).end('Expected application/json'); return; }
+      bodyTimer = setTimeout(() => req.destroy(), 10000);
       const buffers = []; let size = 0;
       for await (const chunk of req) {
         size += chunk.length;
@@ -46,6 +56,11 @@ export function createHandler({ token, runner, origins, waitMaxMs = DEFAULT_WAIT
       let body;
       try { body = JSON.parse(Buffer.concat(buffers).toString('utf8')); }
       catch { res.writeHead(400).end('Invalid JSON'); return; }
+      if (protocolLog && ['initialize', 'server/discover', 'subscriptions/listen', 'resources/subscribe', 'events/list', 'events/subscribe'].includes(body?.method)) {
+        const version = body.method === 'initialize' ? body.params?.protocolVersion : req.headers['mcp-protocol-version'];
+        console.info(JSON.stringify({ event: 'mcp_protocol', method: body.method,
+          version: ['2025-03-26', '2025-06-18', '2026-07-28'].includes(version) ? version : 'other' }));
+      }
       const uris = body?.params?.notifications?.resourceSubscriptions;
       if (body?.method === 'subscriptions/listen' && ['string', 'number'].includes(typeof body.id) &&
           Array.isArray(uris) && uris.some(uri => uri !== PANES_URI)) {
@@ -66,6 +81,7 @@ export function createHandler({ token, runner, origins, waitMaxMs = DEFAULT_WAIT
   };
   handle.close = async () => {
     closed = true;
+    oauth?.close();
     updates.close();
     await mcp.close();
   };

@@ -7,7 +7,7 @@ For installation, follow [SETUP.md](SETUP.md): inspect, explain requirements, as
 
 Herdr TUI and Core are separate runtimes. The bridge supports both at once or either alone. It needs TUI 0.9.5+ or Core (`hc`) 0.1.14+ on its service PATH. Herdr TUI runs on Linux, macOS and native Windows. Use systemd on Linux, the shipped launchd plist on macOS, or WSL2 with systemd for the Windows background setup. Native Windows foreground setup is in docs/setup.md. Keep each runtime, Node and the bridge in the same OS environment. A WSL bridge cannot control native Windows Herdr through its local socket.
 
-The token gives shell-equivalent access. Recommend a dedicated Herdr session. **HUMAN:** accept the risks, complete provider logins and administrator approvals, and paste the existing token into the client. Never put it into chat or tracked files. Never run Serve/Funnel reset or alter another service's route or port exposure. Use SETUP.md's Quirks table for setup failures.
+The token gives shell-equivalent access. Recommend a dedicated Herdr session. **HUMAN:** accept the risks, complete provider logins and administrator approvals, and paste the existing token into bearer clients. Never put it into chat or tracked files. For ChatGPT, use [OAuth setup](docs/oauth.md) and approve its request on the bridge host; no bridge token enters the browser. Never run Serve/Funnel reset or alter another service's route or port exposure. Use SETUP.md's Quirks table for setup failures.
 
 ## Day-to-day use
 

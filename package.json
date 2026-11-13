@@ -41,6 +41,7 @@
     "start": "node bin/herdr-mcp.mjs",
     "token": "node bin/herdr-mcp.mjs token",
     "doctor": "node bin/herdr-mcp.mjs doctor",
+    "oauth": "node bin/herdr-mcp.mjs oauth",
     "test": "node --test",
     "check:long-wait": "node scripts/check-long-wait.mjs",
     "check": "node --check src/server.mjs && node --check src/bridge.mjs && node --check bin/herdr-mcp.mjs && node --test",
@@ -52,6 +53,7 @@
     "@modelcontextprotocol/client": "2.4.0",
     "@modelcontextprotocol/node": "2.1.2",
     "@modelcontextprotocol/server": "2.4.0",
+    "@node-oauth/oauth2-server": "5.3.1",
     "zod": "4.6.7"
   }
 }

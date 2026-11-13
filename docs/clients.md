@@ -4,7 +4,11 @@ Use the URL verified during setup. These examples use `https://herdr-mcp.example
 
 **Supported MCP revisions: 2025-03-26, 2025-06-18 and 2026-07-28 over Streamable HTTP.** A 2025 client's `initialize` request receives its requested version when supported. The official SDK handles negotiation. The 2026 protocol uses `server/discover` and supports push subscriptions. These MCP client revisions are independent of the installed TUI and Core versions. The same connector controls both local runtimes and Core's configured remote machines.
 
-**HUMAN:** paste the existing token directly into the client's protected header field, or load it into the desktop client's environment. Never send it through chat. This server uses a bearer header, not OAuth.
+For bearer-token clients, paste the existing token directly into the client's protected header field, or load it into the desktop client's environment. Never send it through chat. Optional OAuth supports clients without a custom-header field.
+
+## ChatGPT
+
+Follow [OAuth setup](oauth.md). Use **Add custom MCP server**, the verified public URL, and **OAuth**. The fixed public client uses `herdr-chatgpt`, token-endpoint authentication `none` and scope `mcp`. Approve the browser's request from the bridge checkout with `npm run oauth -- approve <request-ID>` in the service environment. No bridge credential is entered into ChatGPT.
 
 ## Grok Bot remote connector
 
