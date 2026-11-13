@@ -20,7 +20,7 @@ export function createMcpServer({ runner, updates, waitMaxMs, era }) {
     { name: 'herdr_skill', description: 'Read the terminal and agent control guide', inputSchema: inputSchemas.herdr_skill },
     {
       name: 'herdr', inputSchema: inputSchemas.herdr,
-      description: `Control local terminals and agents: list, spawn, get, read, send, wait, reply, close. Targets accept pane IDs, names and unique labels. Wait ceiling ${waitMaxMs} ms. Sending confirms delivery, not completion. Read herdr_skill for syntax.`,
+      description: `Control terminals and agents on configured machines. Wait ceiling ${waitMaxMs} ms. Sending confirms delivery, not completion. Read herdr_skill for syntax.`,
     },
   ] }));
 

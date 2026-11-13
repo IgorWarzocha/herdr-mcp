@@ -73,6 +73,40 @@ test('routing rejects ambiguous identities and never retries a Core mutation on 
   assert.deepEqual(mutations, [['tui', ...args]], 'raw flags must not become prompt text');
 });
 
+test('machine routing scopes duplicate IDs, preserves payloads and never falls back locally', async () => {
+  const id = 'a'.repeat(32), offline = 'b'.repeat(32), calls = [];
+  let name = 'desktop';
+  const machines = () => [{ id, name, state: 'connected' }, { id: offline, name: 'offline', state: 'unreachable' }];
+  const row = address => ({ address, name: 'worker', agent: 'pi', status: 'idle', turn: 0, state: 'live', cwd: '/project' });
+  const runtimes = createRuntimes({ core: { async run(args) {
+    if (args[1] === 'machine') return json({ machines: machines() });
+    if (args[1] === 'ls') return json({ terminals: [row('t1'), row(`${name}/t1`)], machines: machines() });
+    calls.push(args);
+    if (args[1] === 'send') return json({ status: 'idle', turn: 0, started: false });
+    if (args[1] === 'run') return json(row(`${name}/t2`));
+    if (args[1] === 'get') return json({ ...row(`${name}/t1`), status: { state: 'idle', app: 'pi' } });
+    return { ...ok, exit_code: 1, stderr: JSON.stringify({ error: { kind: 'unavailable' } }) };
+  } } });
+  const inventory = JSON.parse((await runtimes.execute(['list'])).stdout);
+  assert.deepEqual(inventory.panes.map(pane => pane.pane_id).sort(), [`core:${id}/t1`, 'core:t1'].sort());
+  assert.equal(inventory.machines.find(machine => machine.id === offline).state, 'unreachable');
+  const scoped = normalize({ command: '--machine desktop send worker "--machine offline"' });
+  assert.equal((await runtimes.execute(scoped)).code, 'ok');
+  assert.deepEqual(calls.pop(), ['--json', 'send', `${id}/t1`, '--', '--machine offline']);
+  assert.equal((await runtimes.execute(['send', 'worker', 'local task'])).code, 'ok');
+  assert.deepEqual(calls.pop(), ['--json', 'send', 't1', '--', 'local task']);
+  assert.equal((await runtimes.execute(['--machine', 'desktop', 'spawn', '--', 'node'])).pane_id, `core:${id}/t2`);
+  assert.deepEqual(calls.pop(), ['--json', 'run', '--bg', '--no-parent', '--on', id, '--', 'node']);
+  name = 'renamed';
+  assert.equal((await runtimes.execute(['get', `core:${id}/t1`])).pane_id, `core:${id}/t1`);
+  calls.length = 0;
+  assert.equal((await runtimes.execute(['--machine', 'offline', 'send', 't1', 'hello'])).code, 'runtime_unavailable');
+  assert.equal((await runtimes.execute(['--machine', 'missing', 'spawn', '--', 'node'])).code, 'invalid_arguments');
+  assert.equal((await runtimes.execute(['--machine', 'renamed', 'close', 'core:t1'])).code, 'invalid_arguments');
+  assert.equal((await runtimes.execute(['close', `core:${offline}/t1`])).code, 'runtime_unavailable');
+  assert.deepEqual(calls, []);
+});
+
 test('subprocesses bound output and release shared capacity after cancellation', async t => {
   const budget = { active: 0 };
   const options = { binary: process.execPath, home: tmpdir(), path: process.env.PATH, budget, concurrency: 1, outputBytes: 32 };
@@ -106,6 +140,17 @@ test('clean replies follow the saved branch without exposing reasoning or unfini
   assert.equal(reply.text, 'Answer');
   assert.equal(reply.message_id, 'answer');
   assert.equal(reply.newer_activity, true);
+  const machineId = 'a'.repeat(32);
+  const runtimes = createRuntimes({ core: { async run(args) {
+    if (args[1] === 'machine') return json({ machines: [{ id: machineId, name: 'remote', state: 'connected' }] });
+    if (args[1] === 'get') return json({ address: 'remote/t1', state: 'live', turn: 0, cwd: dir,
+      status: { app: 'pi', state: 'idle' }, labels: { 'pi.session_file': path } });
+    assert.equal(args[1], 'exec');
+    assert.equal(args[3], machineId);
+    return json({ code: 1, timed_out: false, truncated: false, stdout: '', stderr: '' });
+  } } });
+  assert.equal((await runtimes.execute(['reply', `core:${machineId}/t1`])).code, 'reply_unavailable',
+    'a failed remote reader must not open the same path on the bridge host');
 });
 
 test('restart checks use the service environment and refuse another checkout', async () => {

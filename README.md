@@ -1,12 +1,14 @@
 # herdr-mcp
 
-Let an AI agent control [Herdr TUI](https://github.com/herdrdev/herdr) panes and [Herdr Core](https://github.com/herdrdev/herdr-core) terminals on your own machine.
+Let an AI agent control [Herdr TUI](https://github.com/herdrdev/herdr) panes and [Herdr Core](https://github.com/herdrdev/herdr-core) terminals across your configured machines.
 
 herdr-mcp connects MCP clients to both runtimes at once, or either one on its own. Ask your agent to list terminals, check output, send a task or launch a program. New programs prefer Core when `hc` is installed. Existing targets stay on their owning runtime, and failed commands never fall back to the other runtime. You can follow work from a remote client without sitting at the terminal. MCP clients using 2025-03-26 or 2025-06-18 negotiate their version at initialization. Clients using 2026-07-28 can also receive push updates.
 
 It is for people who use Herdr TUI or Core and want to give an agent remote access. Your machine must stay awake and connected.
 
-`list` merges local targets from both runtimes, with their reported labels and state. TUI pane IDs stay unchanged. Core terminal IDs look like `core:t1`. Friendly commands accept pane IDs, agent names and unique labels. `send` submits input to a Core program, prompts a TUI agent or runs a command in an available TUI shell pane. `spawn --name review --cwd /absolute/project -- pi` starts a program without choosing a runtime. `read` returns unwrapped terminal text by default. `reply` reads Pi's latest completed reply from its reported session file, without terminal borders or screen-width wrapping.
+`list` merges local TUI panes and local and remote Core terminals, with their reported labels, state and machine catalogue. TUI pane IDs stay unchanged. Local Core IDs look like `core:t1`; remote IDs include the permanent machine ID. Names and new programs are local unless you prefix the command with `--machine <name-or-ID>`, for example `--machine desktop send reviewer "Review the changes"` or `--machine laptop spawn -- pi`. The bridge uses the same Core machine catalogue as Shepherdr, configured with `hc machine add` on the bridge host. It needs no separate MCP endpoint on each machine.
+
+`send` submits input to a Core program, prompts a TUI agent or runs a command in an available TUI shell pane. `spawn --name review --cwd /absolute/project -- pi` starts a local program without choosing a runtime. `read` returns unwrapped terminal text by default. `reply` reads Pi's latest completed reply from its reported session file, without terminal borders or screen-width wrapping. Remote replies run the same bounded reader on the owning machine and require Node.js there.
 
 Clients using MCP 2026-07-28 can subscribe to pane-directory changes instead of repeatedly calling a tool to check status. The bridge uses the official SDK v2 and includes a [receiving client](docs/push.md). Receiving an update does not by itself start a model turn in Grok Bot or Cursor. The 2025 clients retain tools, resource reads and blocking waits without needing a persistent listener.
 
@@ -34,7 +36,7 @@ The agent will help you choose. You do not need both tunnel providers.
 
 ## Risks
 
-**The token gives shell-equivalent access as the user running Herdr.** A connected agent can read what is on screen and type commands into panes. This is not a sandbox.
+**The token gives shell-equivalent access as the user running Herdr, including Core's configured remote machines.** A connected agent can read what is on screen and type commands into panes. This is not a sandbox.
 
 - A malicious prompt or document can steer an agent into using that access.
 - Terminal output may contain passwords, keys or private work.

@@ -121,7 +121,7 @@ export async function readReply(runner, pane, options, signal) {
 
 // Both runtimes must report an exact current session path. Never discover one
 // by scanning a working directory or choosing the newest conversation file.
-export async function readSessionReply(path, pane, options, signal, status) {
+export async function readSessionReply(path, pane, options, signal, status, outputBytes) {
   const { offset, limit, messageId } = replyOptions(options);
   if (typeof path !== 'string' || !isAbsolute(path) || extname(path) !== '.jsonl') {
     throw unavailable('The target has not reported an absolute Pi session file path. Read the terminal instead.');
@@ -130,12 +130,25 @@ export async function readSessionReply(path, pane, options, signal, status) {
   if (messageId && messageId !== reply.message_id) throw unavailable('The latest reply changed. Read again from offset 0.');
   const characters = Array.from(reply.text);
   if (offset > characters.length) throw new BridgeError('invalid_arguments', 'The offset is past the end of this reply. Read again from offset 0.');
-  const next = Math.min(offset + limit, characters.length);
-  return {
+  const page = next => ({
     code: 'ok', exit_code: 0, stdout: characters.slice(offset, next).join(''), stderr: '',
     pane_id: pane.pane_id, source: 'pi_session', branch: 'last_persisted', agent_status: status,
     message_id: reply.message_id, timestamp: reply.timestamp, newer_activity: reply.newer_activity,
     offset, next_offset: next < characters.length ? next : null, total_characters: characters.length,
     truncated: next < characters.length,
-  };
+  });
+  let next = Math.min(offset + limit, characters.length);
+  // Core exec wraps stdout in base64. Shorten only that transport's page,
+  // retaining character offsets so callers can retrieve every remaining byte.
+  if (outputBytes !== undefined) {
+    let low = offset, high = next;
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2);
+      if (Buffer.byteLength(JSON.stringify(page(middle))) <= outputBytes) low = middle;
+      else high = middle - 1;
+    }
+    next = low;
+    if (next === offset && offset < characters.length) throw new BridgeError('truncated', 'The reply metadata exceeds the transport budget. Read the terminal instead.');
+  }
+  return page(next);
 }

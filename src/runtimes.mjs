@@ -1,10 +1,11 @@
-import { basename, isAbsolute } from 'node:path';
+import { basename, isAbsolute, win32 } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { executeCommand, normalize } from './bridge.mjs';
 import { readDirectory } from './directory.mjs';
 import { resolveTarget } from './friendly.mjs';
 import { BridgeError, commandResult, exceptionResult, failure } from './errors.mjs';
-import { CORE_ID, createCoreBackend } from './core.mjs';
+import { CORE_ID, CORE_ADDRESS, createCoreBackend } from './core.mjs';
+import { LOCAL_MACHINE } from './core-routing.mjs';
 
 export const RUNTIME_GUIDE = `Control terminals and agents with herdr. Supply args as an array, or command as quoted words.
 list
@@ -16,13 +17,14 @@ get <target>
 spawn [--name NAME] [--cwd /absolute/path] -- <program> [arguments...]
 close <target>
 Use a pane_id from list, an agent name or a unique label. Existing targets stay on their owning runtime. New programs prefer Core when installed. Failed mutations are never retried on another runtime. Spawn acknowledges launch, not task completion. Pass startup arguments to the program, then inspect readiness before sending more input. Template launches report first_message.sent when Core handles task delivery.
+list includes Core's configured machines and remote terminals. Prefix a command with --machine <name-or-ID> to scope it, for example --machine desktop send worker "review this" or --machine laptop spawn -- pi. Omit it for local names and new programs. Remote pane IDs use core:<machine-ID>/tN and route directly. A machine selector must agree with an explicit pane ID. Slow remote lists can omit terminals; absence does not prove closure.
 Sending confirms delivery, not completion. Waits block for at most the configured ceiling; blocked means attention is needed, not success. Unknown status is not completion. Plain programs without reported status may need an output match or exit. Output matches on Core observe new output after the wait begins. Regular expressions are TUI-only.
 read returns terminal text, not a full transcript. Incomplete history is marked. reply returns completed Pi text from the exact reported session file on the last persisted branch; it may predate current work. Use next_offset and message_id to continue a long reply.
-Machine and session routing are fixed by the bridge. Raw TUI CLI commands remain available when TUI is installed; use subcommand --help for their syntax.`;
+Core owns machine connections; configure them with hc machine add on the bridge host. Remote reply needs Node.js there. Sessions stay pinned. Raw TUI CLI commands remain local; use subcommand --help for their syntax.`;
 
 const ok = (stdout = '', fields = {}) => ({ code: 'ok', exit_code: 0, stdout, stderr: '', ...fields });
 
-export function spawnSpec(args) {
+export function spawnSpec(args, remote = false) {
   const spec = { argv: [] };
   let i = 1;
   const seen = new Set();
@@ -36,7 +38,7 @@ export function spawnSpec(args) {
   if (args[i] === '--') i++;
   spec.argv = args.slice(i);
   if (!spec.argv.length || !spec.argv[0] || spec.argv[0].startsWith('-') ||
-      (spec.cwd && !isAbsolute(spec.cwd)) || (spec.name && !/^[a-z0-9_-]{1,32}$/.test(spec.name))) {
+      (spec.cwd && !isAbsolute(spec.cwd) && !(remote && win32.isAbsolute(spec.cwd))) || (spec.name && !/^[a-z0-9_-]{1,32}$/.test(spec.name))) {
     throw new BridgeError('invalid_arguments', 'Give a program, an absolute cwd and a name of 1 to 32 lowercase letters, digits, underscores or hyphens.');
   }
   return spec;
@@ -79,35 +81,41 @@ async function spawnTui(runner, spec, signal) {
 // remains visible and can never turn a mutation into a fallback on the other one.
 export function createRuntimes({ tui, core }) {
   const coreBackend = core ? createCoreBackend(core) : undefined;
-  async function directory(signal) {
+  async function directory(signal, machine) {
     const sources = await Promise.all([
-      ...(tui ? [readDirectory(tui, signal).then(result => ['tui', result])] : []),
-      ...(core ? [coreBackend.directory(signal).then(result => ['core', result])] : []),
+      ...(tui && (!machine || machine.id === 'local') ? [readDirectory(tui, signal).then(result => ['tui', result])] : []),
+      ...(core ? [coreBackend.directory(signal, machine).then(result => ['core', result])] : []),
     ]);
-    const panes = [], unavailable = [];
+    const panes = [], unavailable = [], machines = [];
     for (const [runtime, result] of sources) {
       if (result.code !== 'ok') { unavailable.push({ runtime, code: result.code, next: result.next }); continue; }
-      const rows = JSON.parse(result.stdout).panes;
-      panes.push(...rows.map(pane => runtime === 'tui' ? { ...pane, runtime } : pane));
+      const data = JSON.parse(result.stdout);
+      if (data.machines) machines.push(...data.machines);
+      panes.push(...data.panes.map(pane => runtime === 'tui' ? { ...pane, runtime, machine_id: 'local' } : pane));
     }
     if (!panes.length && unavailable.length) return { ...failure('runtime_unavailable'), unavailable };
-    const stdout = JSON.stringify({ panes, ...(unavailable.length ? { unavailable } : {}) });
+    const stdout = JSON.stringify({ panes, machines: machines.length ? machines : [LOCAL_MACHINE], ...(unavailable.length ? { unavailable } : {}) });
     if (Buffer.byteLength(stdout) > 131072) return failure('truncated', 'The merged directory exceeds 128 KiB. No partial list is used for targeting.');
     return ok(stdout);
   }
-  async function targetPane(target, signal) {
-    if (!target || target.startsWith('-') || (target.startsWith('core:') && !CORE_ID.test(target.slice('core:'.length)))) throw new BridgeError('invalid_arguments', 'Choose a local pane_id or unique name from list.');
+  async function targetPane(target, signal, machine) {
+    if (!target || target.startsWith('-') || (target.startsWith('core:') && !CORE_ADDRESS.test(target.slice('core:'.length)))) throw new BridgeError('invalid_arguments', 'Choose a pane_id or a name on the selected machine from list.');
     // Qualified identities do not need an unavailable unrelated runtime.
     let result;
-    if (target.startsWith('core:')) {
+    if (target.startsWith('core:') || (machine && CORE_ID.test(target))) {
       if (!core) throw new BridgeError('runtime_unavailable');
       // Core retains finished terminals outside the default live list. An
       // explicit address remains readable after exit and needs no name lookup.
-      return { runtime: 'core', pane: { runtime: 'core', pane_id: target, local_id: target.slice('core:'.length) } };
+      const address = target.startsWith('core:') ? target.slice('core:'.length)
+        : machine.id === 'local' ? target : `${machine.id}/${target}`;
+      const owner = address.includes('/') ? address.split('/')[0] : 'local';
+      if (machine && owner !== machine.id) throw new BridgeError('invalid_arguments', 'The machine selector and pane ID name different machines. No action was sent.');
+      return { runtime: 'core', pane: await coreBackend.pane(address, signal) };
     } else if (/^w[^:]+:p\d+$/.test(target)) {
+      if (machine && machine.id !== 'local') throw new BridgeError('invalid_arguments', 'TUI pane IDs are local to the bridge.');
       if (!tui) throw new BridgeError('runtime_unavailable');
       result = await readDirectory(tui, signal);
-    } else result = await directory(signal);
+    } else result = await directory(signal, machine ?? LOCAL_MACHINE);
     if (result.code !== 'ok') return { result };
     const inventory = JSON.parse(result.stdout);
     if (inventory.unavailable?.length) throw new BridgeError('runtime_unavailable', 'A runtime is unavailable, so a name might be ambiguous. Choose an explicit pane_id from list.');
@@ -117,25 +125,32 @@ export function createRuntimes({ tui, core }) {
   async function execute(inputArgs, signal, waitMaxMs) {
     const started = performance.now();
     try {
-      const args = friendlyArgs(inputArgs);
+      let machine;
+      const nativeArgs = inputArgs[0] === '--machine' ? inputArgs.slice(2) : inputArgs;
+      if (inputArgs[0] === '--machine') {
+        if (!inputArgs[1] || !nativeArgs.length) throw new BridgeError('invalid_arguments');
+        if (!core && inputArgs[1] !== 'local') throw new BridgeError('runtime_unavailable');
+        machine = core ? await coreBackend.machine(inputArgs[1], signal) : LOCAL_MACHINE;
+      }
+      const args = friendlyArgs(nativeArgs);
       const [verb, target, ...options] = args;
       let result;
       if (verb === '--skill' || (args.length === 1 && ['--help', '-h'].includes(verb))) result = ok(RUNTIME_GUIDE);
       else if (verb === 'list') {
         if (args.length !== 1) throw new BridgeError('invalid_arguments');
-        result = await directory(signal);
+        result = await directory(signal, machine);
       } else if (verb === 'spawn') {
-        const spec = spawnSpec(args);
-        result = core ? await coreBackend.spawn(spec, signal) : await spawnTui(tui, spec, signal);
+        const spec = spawnSpec(args, machine && machine.id !== 'local');
+        result = core ? await coreBackend.spawn(spec, signal, machine) : await spawnTui(tui, spec, signal);
       } else if (['read', 'send', 'wait', 'reply', 'get', 'close'].includes(verb)) {
         if (['get', 'close'].includes(verb) && options.length) throw new BridgeError('invalid_arguments', `${verb} takes only an explicit target.`);
-        const resolved = await targetPane(target, signal);
+        const resolved = await targetPane(target, signal, machine);
         if (resolved.result) result = resolved.result;
         else if (resolved.runtime === 'core') result = await coreBackend.execute(verb, resolved.pane, options, signal, waitMaxMs);
-        else if (args !== inputArgs && ['pane', 'agent'].includes(inputArgs[0])) {
+        else if (args !== nativeArgs && ['pane', 'agent'].includes(nativeArgs[0])) {
           // Raw TUI flags keep their CLI meaning. Re-normalising them as a
           // friendly send would turn --wait into literal prompt text.
-          const native = [...inputArgs]; native[2] = resolved.pane.pane_id;
+          const native = [...nativeArgs]; native[2] = resolved.pane.pane_id;
           result = await executeCommand(tui, normalize({ args: native }), signal, waitMaxMs);
         }
         else if (verb === 'get') result = ok(JSON.stringify({ ...resolved.pane, runtime: 'tui' }),
@@ -147,7 +162,7 @@ export function createRuntimes({ tui, core }) {
           result = { ...result, pane_id: resolved.pane.pane_id };
         }
       } else {
-        if (!tui || args.some(arg => arg.startsWith('core:'))) throw new BridgeError('invalid_arguments', 'Use list, spawn, get, read, send, wait, reply or close for this target.');
+        if (!tui || (machine && machine.id !== 'local') || args.some(arg => arg.startsWith('core:'))) throw new BridgeError('invalid_arguments', 'Use list, spawn, get, read, send, wait, reply or close for this target.');
         result = await executeCommand(tui, args, signal, waitMaxMs);
       }
       return { ...result, elapsed_ms: Math.round(performance.now() - started) };

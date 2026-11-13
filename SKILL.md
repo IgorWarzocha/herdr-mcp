@@ -22,15 +22,17 @@ Call `herdr_skill` once to read the unified bridge guide. Then use `herdr` with 
 {"args":["spawn","--name","review","--cwd","/absolute/project","--","pi"]}
 {"args":["get","core:t1"]}
 {"args":["close","core:t1"]}
+{"args":["--machine","desktop","send","reviewer","Review the current changes"]}
+{"args":["--machine","laptop","spawn","--","pi"]}
 ```
 
-`list` merges local TUI panes and Core terminals. TUI IDs stay unchanged. Core IDs use `core:tN`. Friendly commands resolve IDs, agent names and unique reported labels across both runtimes. Duplicate labels require an explicit ID. If a runtime is offline, `list` reports it in `unavailable` and name resolution fails closed. Choose a known explicit ID on the available runtime. No input is sent on ambiguity. A known Core ID can address a retained finished terminal even after it leaves the live list.
+`list` merges local TUI panes and local and remote Core terminals, and reports the Core machine catalogue with connection states. TUI IDs stay unchanged. Local Core IDs use `core:tN`; remote IDs use `core:<machine-ID>/tN` and survive machine renames. Names and new programs default to local. Prefix commands with `--machine <name-or-ID>` to select a configured machine. `--machine local list` filters to local targets. A selector must agree with an explicit pane ID. Duplicate labels require an explicit ID. If a runtime is offline, `list` reports it in `unavailable` and name resolution fails closed. No input is sent on ambiguity or retried locally after a remote failure. Slow remote lists can omit terminals, so absence does not prove closure. A known Core ID can address a retained finished terminal even after it leaves the live list.
 
 `spawn [--name NAME] [--cwd /absolute/path] -- <program> [arguments...]` prefers Core whenever its binary is installed, even if its backend is unavailable. Failed Core spawns never create a TUI pane instead. Without Core, spawn supports TUI agent executables such as `pi`, `claude` and `codex`, not arbitrary programs. Names accept 1 to 32 lowercase letters, digits, underscores or hyphens. Spawn acknowledges launch, not task completion. Pass startup arguments to the program, then inspect readiness before sending input. Core template launches include `first_message.sent` when Core handles task delivery. If false, the program exists but its task was not delivered. `close` stops the selected target.
 
 Existing targets stay on their owning runtime. Raw TUI commands remain available when TUI is installed, with TUI syntax for commands outside the unified verbs. There is no raw Core CLI pass-through.
 
-`send` submits input to a Core program, prompts a TUI agent or runs the text in an available TUI shell pane. It acknowledges delivery, not that the turn started or finished. Do not resend merely because status has not changed. The bridge pins each local runtime. Machine discovery (`machine list`), machine routing and session switching through tool arguments are disabled. Core `hc ls` may contact configured remote machines, but remote rows are filtered out and the adapter cannot route mutations to them. Do not use `--current` or `--session`. On TUI, a payload consisting solely of a routing flag such as `--session=other` is rejected because Herdr would interpret it as routing rather than text.
+`send` submits input to a Core program, prompts a TUI agent or runs the text in an available TUI shell pane. It acknowledges delivery, not that the turn started or finished. Do not resend merely because status has not changed. Core owns machine connections, configured with `hc machine add` on the bridge host. Raw TUI commands remain local and sessions stay pinned. Do not use `--current` or `--session`. On TUI, a payload consisting solely of a routing flag such as `--session=other` is rejected because Herdr would interpret it as routing rather than text.
 
 Use `get <target>` for reported status. An unknown status is not completion. The bridge does not infer agent state from terminal text. A list drawn inside a pane is just terminal content and may be stale or describe a different agent.
 
@@ -46,9 +48,9 @@ TUI terminal history capture can return `agent_not_idle` while an agent is worki
 
 Use `reply <target>` for Pi's latest completed assistant text, without terminal wrapping or borders. The bridge follows the exact reported session path and returns text blocks only, never reasoning or tool payloads. It does not search other sessions by working directory. Core requires `get` to report `status.app: pi` and `labels['pi.session_file']`. Our Pi integration supplies that label. It is not a Core guarantee for every Pi installation.
 
-The result identifies `message_id`, `agent_status` and `newer_activity`. It is the latest completed reply on the **last persisted branch**, not proof the current task has finished. Pi can switch its live branch before writing another record. Failed, aborted or still-working turns may leave an older completed reply as the latest available one.
+Remote replies run the same bounded reader through Core on the owning machine and require Node.js there. Remote session paths are never opened on the bridge host. The result identifies `message_id`, `agent_status` and `newer_activity`. It is the latest completed reply on the **last persisted branch**, not proof the current task has finished. Pi can switch its live branch before writing another record. Failed, aborted or still-working turns may leave an older completed reply as the latest available one.
 
-Long replies are paged. When `next_offset` is not null, call `reply <target> --offset <next_offset> --message-id <message_id>`. Offsets count Unicode characters. `--limit` accepts 1 to 30000 characters, default 16000. A changed latest message rejects continuation rather than mixing replies. `reply_unavailable` means no reliable completed reply could be read.
+Long replies are paged. When `next_offset` is not null, call `reply <target> --offset <next_offset> --message-id <message_id>`. Offsets count Unicode characters. `--limit` accepts 1 to 30000 characters, default 16000. Remote pages can be shorter to fit the encoded transport budget. A changed latest message rejects continuation rather than mixing replies. `reply_unavailable` means no reliable completed reply could be read.
 
 ## Watching a pane
 

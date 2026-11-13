@@ -1,14 +1,16 @@
 import { isAbsolute, extname } from 'node:path';
 import { BridgeError, commandResult, exceptionResult, failure } from './errors.mjs';
 import { readSessionReply } from './reply.mjs';
+import { readRemoteSessionReply } from './remote-reply.mjs';
+import { CORE_ADDRESS, LOCAL_MACHINE, machineCatalogue, selectMachine, requireConnected, corePane } from './core-routing.mjs';
 
 // Core reserves this exact ID shape. Other t-prefixed words are names and
 // must never bypass the bridge's cross-runtime ambiguity checks.
-export const CORE_ID = /^t[1-9][0-9bcdfghjkmnpqrstvwxyz]*$/;
-const LOCAL = CORE_ID;
+export { CORE_ID, CORE_ADDRESS } from './core-routing.mjs';
 const kinds = {
   not_found: 'pane_not_found', unavailable: 'runtime_unavailable', blocked: 'target_blocked',
   status_mismatch: 'target_busy', finished: 'target_finished', usage: 'invalid_arguments',
+  machine_unknown: 'invalid_arguments', needs_update: 'runtime_unavailable',
 };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const optionalString = value => value == null || typeof value === 'string';
@@ -29,13 +31,13 @@ function coreResult(raw) {
   return commandResult(raw);
 }
 
-function summary(row) {
-  requireData(object(row) && LOCAL.test(row.address) && typeof row.address === 'string' &&
+function summary(row, machines = []) {
+  requireData(object(row) && typeof row.address === 'string' &&
     ['live', 'finished'].includes(row.state) && turnValid(row.turn) &&
     typeof row.agent === 'string' && typeof row.cwd === 'string' &&
     ['name', 'where', 'status'].every(key => optionalString(row[key])));
   return {
-    pane_id: `core:${row.address}`, local_id: row.address, runtime: 'core',
+    ...corePane(row.address, machines),
     workspace_id: null, workspace_label: null, tab_id: null, tab_label: row.where ?? null,
     name: row.name ?? null, terminal_title: null, agent: row.agent,
     agent_status: row.status ?? 'unknown', state: row.state,
@@ -43,15 +45,16 @@ function summary(row) {
   };
 }
 
-function record(row, id) {
-  requireData(object(row) && row.address === id && ['live', 'finished'].includes(row.state) &&
+function record(row, pane) {
+  const machines = [{ id: pane.machine_id, name: pane.machine_name, state: 'connected' }];
+  requireData(object(row) && corePane(row.address, machines).pane_id === pane.pane_id && ['live', 'finished'].includes(row.state) &&
     turnValid(row.turn) && typeof row.cwd === 'string' && optionalString(row.name) &&
     ['exit_code', 'signal'].every(key => row[key] == null || Number.isSafeInteger(row[key])) &&
     optionalString(row.reason) &&
     (row.status == null || (object(row.status) && typeof row.status.state === 'string' && optionalString(row.status.app))));
-  const pane = summary({ ...row, agent: row.status?.app ?? '', status: row.status?.state,
-    where: row.labels?.where });
-  return { ...pane, status: row.status ?? null, exit_code: row.exit_code ?? null,
+  const metadata = summary({ ...row, agent: row.status?.app ?? '', status: row.status?.state,
+    where: row.labels?.where }, machines);
+  return { ...metadata, status: row.status ?? null, exit_code: row.exit_code ?? null,
     signal: row.signal ?? null, reason: row.reason ?? null };
 }
 
@@ -93,30 +96,53 @@ export function createCoreBackend(runner) {
     return { ...result, stdout };
   }
 
-  async function directory(signal) {
+  async function catalogue(signal) {
+    const result = await call(['machine', 'ls'], signal);
+    if (result.code !== 'ok') throw new BridgeError(result.code, result.next);
+    return machineCatalogue(json(result).machines);
+  }
+
+  async function machine(selector, signal) {
+    if (selector === 'local') return LOCAL_MACHINE;
+    const selected = selectMachine(await catalogue(signal), selector);
+    requireConnected(selected);
+    return selected;
+  }
+
+  async function pane(address, signal) {
+    if (!CORE_ADDRESS.test(address)) throw new BridgeError('invalid_arguments');
+    const selected = address.includes('/') ? await machine(address.split('/')[0], signal) : LOCAL_MACHINE;
+    return corePane(address, [selected]);
+  }
+
+  async function directory(signal, selected) {
     return guarded(async () => {
       const result = await call(['ls'], signal);
       if (result.code !== 'ok') return { ...result, stdout: '' };
       const data = json(result);
       requireData(object(data) && Array.isArray(data.terminals));
+      requireData(data.machines === undefined || Array.isArray(data.machines));
+      // `hc ls` deliberately projects machine health without permanent IDs.
+      // Only the catalogue can turn its alias-prefixed rows into durable IDs.
+      const machines = data.machines?.length ? await catalogue(signal) : [];
       const panes = [], ids = new Set();
       for (const row of data.terminals) {
         requireData(object(row) && typeof row.address === 'string');
-        if (row.address.includes('/')) continue; // Remote terminals are outside the pinned local runtime.
-        const pane = summary(row);
-        requireData(!ids.has(pane.local_id));
-        ids.add(pane.local_id); panes.push(pane);
+        const pane = summary(row, machines);
+        requireData(!ids.has(pane.pane_id));
+        ids.add(pane.pane_id);
+        if (!selected || pane.machine_id === selected.id) panes.push(pane);
       }
       panes.sort((a, b) => a.pane_id.localeCompare(b.pane_id));
-      return output(result, { panes });
+      return output(result, { panes, machines: [LOCAL_MACHINE, ...machines] });
     });
   }
 
   async function execute(verb, pane, options = [], signal, waitMaxMs = 90000) {
     return guarded(async () => {
-      if (!pane || typeof pane.local_id !== 'string' || !LOCAL.test(pane.local_id) ||
-          pane.pane_id !== `core:${pane.local_id}` || pane.runtime !== 'core') throw new BridgeError('invalid_arguments');
-      const id = pane.local_id;
+      const id = pane?.address ?? pane?.local_id;
+      if (!pane || !CORE_ADDRESS.test(id) || pane.pane_id !== `core:${id}` || pane.runtime !== 'core') throw new BridgeError('invalid_arguments');
+      const machines = [{ id: pane.machine_id, name: pane.machine_name, state: 'connected' }];
       if (verb === 'read') {
         const opts = flags(options, ['--lines', '--source']);
         const source = opts['--source'] ?? 'recent-unwrapped';
@@ -154,7 +180,7 @@ export function createCoreBackend(runner) {
         if (result.code === 'timeout') return { ...result, ...failure('wait_timeout'), ...meta, state: 'unknown' };
         if (result.code !== 'ok') return { ...result, ...meta };
         const data = json(result);
-        requireData(object(data) && data.terminal === id && typeof data.ended === 'boolean' &&
+        requireData(object(data) && corePane(data.terminal, machines).pane_id === pane.pane_id && typeof data.ended === 'boolean' &&
           typeof data.reason === 'string' && optionalString(data.status) && turnValid(data.turn) &&
           ['exit_code', 'signal'].every(key => data[key] == null || Number.isSafeInteger(data[key])));
         result = output(result, { pane_id: pane.pane_id, ended: data.ended, reason: data.reason,
@@ -167,29 +193,32 @@ export function createCoreBackend(runner) {
       const data = json(result);
       if (verb === 'reply') {
         const path = data?.labels?.['pi.session_file'];
-        if (data?.address !== id || data?.status?.app !== 'pi' || typeof path !== 'string' ||
-            !isAbsolute(path) || extname(path) !== '.jsonl') throw new BridgeError('reply_unavailable');
-        const metadata = record(data, id);
+        if (data?.status?.app !== 'pi' || typeof path !== 'string' || extname(path) !== '.jsonl') throw new BridgeError('reply_unavailable');
+        const metadata = record(data, pane);
+        if (pane.machine_id !== 'local') return readRemoteSessionReply(call, pane, path, options, signal, metadata.agent_status);
+        if (!isAbsolute(path)) throw new BridgeError('reply_unavailable');
         return readSessionReply(path, pane, options, signal, metadata.agent_status);
       }
-      const metadata = record(data, id);
+      const metadata = record(data, pane);
       return output({ ...result, pane_id: pane.pane_id, state: metadata.agent_status }, metadata);
     });
   }
 
-  async function spawn(spec, signal) {
+  async function spawn(spec, signal, selected = LOCAL_MACHINE) {
     return guarded(async () => {
       if (!object(spec) || Object.keys(spec).some(key => !['argv', 'cwd', 'name'].includes(key)) ||
           !Array.isArray(spec.argv) || !spec.argv.length || spec.argv.some(arg => typeof arg !== 'string' || arg.includes('\0')) ||
           !spec.argv[0] || ['cwd', 'name'].some(key => spec[key] !== undefined &&
             (typeof spec[key] !== 'string' || !spec[key] || spec[key].includes('\0')))) throw new BridgeError('invalid_arguments');
       const args = ['run', '--bg', '--no-parent'];
+      if (selected.id !== 'local') args.push('--on', selected.id);
       for (const key of ['name', 'cwd']) if (spec[key] !== undefined) args.push(`--${key}`, spec[key]);
       args.push('--', ...spec.argv);
       const result = await call(args, signal);
       if (result.code !== 'ok') return result;
       const data = json(result);
-      const pane = summary(data);
+      const pane = summary(data, [selected]);
+      requireData(pane.machine_id === selected.id);
       if (data.first_message !== undefined) {
         const first = data.first_message;
         requireData(object(first) && typeof first.sent === 'boolean' &&
@@ -201,5 +230,5 @@ export function createCoreBackend(runner) {
         ? { next: 'The program was created, but its template task was not delivered. Inspect this pane before sending input.' } : {}) }, pane);
     });
   }
-  return { directory, execute, spawn };
+  return { directory, execute, spawn, machine, pane };
 }

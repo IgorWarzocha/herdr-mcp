@@ -45,6 +45,11 @@ export function normalize(input) {
     throw new Error('Arguments must be strings without NUL, at most 256 arguments and 64 KiB');
   }
   if (!args.length) return ['--help'];
+  if (args[0] === '--machine') {
+    if (!args[1] || args[1].startsWith('-') || args.length < 3) throw new Error('Use --machine <name-or-ID> before the command.');
+    if (args[2] === '--machine') throw new Error('Choose one machine.');
+    return ['--machine', args[1], ...normalize({ args: args.slice(2) })];
+  }
   const [verb, target, ...rest] = args;
   if (['spawn', 'get', 'close'].includes(verb)) return args;
   if (verb === 'list') {
@@ -59,7 +64,7 @@ export function normalize(input) {
   for (const arg of args) {
     if (arg === '--') break;
     if (/^--(?:session|machine|remote|remote-keybindings)(?:=|$)/.test(arg)) {
-      throw new Error('Session and machine routing are fixed; put literal option-like payloads after --');
+      throw new Error('Raw TUI routing is fixed. Use a leading --machine selector with a unified command, or put literal option-like payloads after --.');
     }
   }
   if (args.length === 1 && ['--help', '-h', '--version', '-V'].includes(args[0])) return args;
